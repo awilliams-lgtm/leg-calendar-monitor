@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Calendar login</title>
+    <style>
+      :root {
+        --bg: #f4f1ea;
+        --fg: #1b2420;
+        --muted: #5c6560;
+        --teal: #0f5c4c;
+        --panel: #ffffff;
+        --border: #d6d0c4;
+      }
+      body {
+        margin: 0;
+        width: 320px;
+        font: 13px/1.45 system-ui, sans-serif;
+        color: var(--fg);
+        background: var(--bg);
+      }
+      main {
+        padding: 14px;
+      }
+      h1 {
+        margin: 0 0 6px;
+        font-size: 16px;
+      }
+      p {
+        margin: 0 0 10px;
+        color: var(--muted);
+      }
+      #status {
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        padding: 10px;
+        margin-bottom: 10px;
+      }
+      button, input {
+        font: inherit;
+      }
+      button {
+        width: 100%;
+        border: 0;
+        border-radius: 8px;
+        padding: 8px 10px;
+        margin-top: 6px;
+        cursor: pointer;
+        background: var(--teal);
+        color: #fff;
+      }
+      button.secondary {
+        background: var(--panel);
+        color: var(--fg);
+        border: 1px solid var(--border);
+      }
+      label {
+        display: block;
+        margin-top: 10px;
+        font-size: 12px;
+        color: var(--muted);
+      }
+      input {
+        width: 100%;
+        box-sizing: border-box;
+        margin-top: 4px;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 7px 8px;
+        background: var(--panel);
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Calendar connector</h1>
+      <p>One work login fills the SA side. Capture an official legislature tab when the site blocks or loads in JavaScript.</p>
+      <div id="status">Checking…</div>
+      <button id="login">Open State Affairs login</button>
+      <button id="sync" class="secondary">Sync SA login now</button>
+      <button id="capture" class="secondary">Capture this official calendar</button>
+      <label>
+        Calendar app URL
+        <input id="appUrl" value="http://localhost:3000" />
+      </label>
+    </main>
+    <script src="popup.js"></script>
+  </body>
+</html>
