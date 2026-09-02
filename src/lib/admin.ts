@@ -2,13 +2,14 @@ import { createHmac, randomBytes, scryptSync, timingSafeEqual } from "crypto";
 import { mkdir, readFile, writeFile } from "fs/promises";
 import path from "path";
 import { NextRequest, NextResponse } from "next/server";
+import { cacheFile } from "@/lib/cache-path";
 import { jsonWithCors } from "@/lib/cors";
 import { envVar } from "@/lib/env";
 
 export const ADMIN_COOKIE = "sa_admin";
 const TTL_SEC = 30 * 24 * 60 * 60;
-const FILE = path.join(process.cwd(), "data", "admin.json");
-const UNLOCK_FILE = path.join(process.cwd(), "data", "admin-unlock.json");
+const FILE = cacheFile("admin.json");
+const UNLOCK_FILE = cacheFile("admin-unlock.json");
 
 type AdminFile = {
   salt: string;
@@ -132,12 +133,16 @@ async function extensionUnlocked(): Promise<boolean> {
 }
 
 export async function markExtensionUnlock() {
-  await mkdir(path.dirname(UNLOCK_FILE), { recursive: true });
-  await writeFile(
-    UNLOCK_FILE,
-    JSON.stringify({ until: new Date(Date.now() + TTL_SEC * 1000).toISOString() }),
-    "utf8",
-  );
+  try {
+    await mkdir(path.dirname(UNLOCK_FILE), { recursive: true });
+    await writeFile(
+      UNLOCK_FILE,
+      JSON.stringify({ until: new Date(Date.now() + TTL_SEC * 1000).toISOString() }),
+      "utf8",
+    );
+  } catch {
+    /* Vercel filesystem can be read-only; cookie auth is enough */
+  }
 }
 
 export async function isAdminRequest(req: NextRequest): Promise<boolean> {

@@ -13,10 +13,20 @@ export function AdminGate({ children }: { children: ReactNode }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
+  async function readJson(res: Response): Promise<Record<string, unknown>> {
+    const text = await res.text();
+    if (!text.trim()) throw new Error(res.ok ? "Empty response from server." : `Server returned ${res.status}.`);
+    try {
+      return JSON.parse(text) as Record<string, unknown>;
+    } catch {
+      throw new Error(res.ok ? "Server returned an invalid response." : `Server returned ${res.status}.`);
+    }
+  }
+
   async function refresh() {
     try {
       const res = await fetch("/api/admin/session", { credentials: "include" });
-      const data = await res.json();
+      const data = await readJson(res);
       setState({ admin: Boolean(data.admin), setupRequired: Boolean(data.setupRequired) });
       return data as AdminState;
     } catch (err) {
@@ -43,9 +53,9 @@ export function AdminGate({ children }: { children: ReactNode }) {
           password,
         }),
       });
-      const data = await res.json();
+      const data = await readJson(res);
       if (!res.ok) {
-        setError(data.error || "Could not sign in.");
+        setError(String(data.error || "Could not sign in."));
         return;
       }
       setPassword("");
@@ -106,7 +116,10 @@ export function useAdmin() {
 
   useEffect(() => {
     void fetch("/api/admin/session", { credentials: "include" })
-      .then((r) => r.json())
+      .then(async (r) => {
+        const text = await r.text();
+        return text ? (JSON.parse(text) as { admin?: boolean }) : { admin: false };
+      })
       .then((data) => setAdmin(Boolean(data.admin)))
       .catch(() => setAdmin(false));
   }, []);
