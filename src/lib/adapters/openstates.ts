@@ -1,4 +1,5 @@
 import type { CalendarEvent } from "@/lib/types";
+import { envVar } from "@/lib/env";
 import { extractBills } from "@/lib/match";
 
 type OpenStatesEvent = {
@@ -48,7 +49,7 @@ async function openStatesGet(url: URL, key: string): Promise<Response> {
 }
 
 export async function fetchOpenStatesEvents(jurisdiction: string, afterIso: string): Promise<CalendarEvent[]> {
-  const key = process.env.OPENSTATES_API_KEY?.trim();
+  const key = envVar("OPENSTATES_API_KEY");
   if (!key) {
     throw new Error("OPENSTATES_API_KEY is not set");
   }

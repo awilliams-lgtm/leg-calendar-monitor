@@ -52,7 +52,7 @@ export async function GET(req: NextRequest) {
     if (check && playwright.ok && !playwright.running && (playwright.meetings || 0) > 0) {
       await importCapturedWindow().catch(() => undefined);
     }
-    return jsonWithCors(req, { ok: true, ...status, playwright });
+    return jsonWithCors(req, { ok: true, hosted: Boolean(process.env.VERCEL), ...status, playwright });
   }
   try {
     const profile = await fetchSaProfile();
@@ -60,7 +60,7 @@ export async function GET(req: NextRequest) {
       await importCapturedWindow().catch(() => undefined);
     }
     const next = await sessionStatus({ reload: true });
-    return jsonWithCors(req, { ok: true, ...next, profile, playwright });
+    return jsonWithCors(req, { ok: true, hosted: Boolean(process.env.VERCEL), ...next, profile, playwright });
   } catch (err) {
     if (playwright.ok && !playwright.running && (playwright.meetings || 0) > 0) {
       await importCapturedWindow().catch(() => undefined);
@@ -68,6 +68,7 @@ export async function GET(req: NextRequest) {
     const next = await sessionStatus({ reload: true });
     return jsonWithCors(req, {
       ok: false,
+      hosted: Boolean(process.env.VERCEL),
       ...next,
       connected: false,
       needsLogin: true,

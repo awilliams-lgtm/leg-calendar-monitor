@@ -31,6 +31,7 @@ type Session = {
   profileError?: string;
   profile?: { email?: string; name?: string };
   playwright?: PlaywrightStatus;
+  hosted?: boolean;
 };
 
 export function SaConnect() {
@@ -44,10 +45,12 @@ export function SaConnect() {
 
   async function refresh(check = false) {
     const res = await fetch(`/api/sa/session${check ? "?check=1" : ""}`);
-    const data = await res.json();
+    const text = await res.text();
+    const data = (text ? JSON.parse(text) : {}) as Session;
     setSession(data);
+    if (data.hosted) setAdvanced(true);
     if (typeof data.promptDaily === "boolean") setPromptDaily(data.promptDaily);
-    return data as Session;
+    return data;
   }
 
   useEffect(() => {
@@ -232,6 +235,7 @@ export function SaConnect() {
       </div>
 
       <div className="flex flex-wrap gap-2">
+        {!session?.hosted && (
         <button
           type="button"
           onClick={() => void signInWithPlaywright()}
@@ -240,6 +244,7 @@ export function SaConnect() {
         >
           {busy === "playwright" || waiting ? "Waiting for browser login…" : "Open Playwright login"}
         </button>
+        )}
         {waiting && (
           <button
             type="button"
@@ -255,12 +260,11 @@ export function SaConnect() {
       </div>
 
       <div className="rounded-xl border border-border bg-teal-soft/40 px-4 py-3 text-sm">
-        <p className="font-medium">Repeatable login</p>
+        <p className="font-medium">{session?.hosted ? "Connect SA on this hosted site" : "Repeatable login"}</p>
         <p className="mt-2 text-muted">
-          This opens an Edge or Chrome window on this computer, the same way the hearings scraper
-          does. Sign in with JumpCloud once. The app saves that session under{" "}
-          <code>data/sa-auth.json</code> and reuses it until Cloudflare Access expires. You can also
-          run <code>npm run sa:login</code> from a terminal.
+          {session?.hosted
+            ? "This Vercel server cannot open a Playwright window. Sign in at admin.stateaffairs.com/meetings, then paste the Cookie header below. The session is stored in Neon for the whole team."
+            : "This opens an Edge or Chrome window on this computer, the same way the hearings scraper does. Sign in with JumpCloud once. The app saves that session under data/sa-auth.json and reuses it until Cloudflare Access expires. You can also run npm run sa:login from a terminal."}
         </p>
       </div>
 
@@ -293,7 +297,7 @@ export function SaConnect() {
         onClick={() => setAdvanced((v) => !v)}
         className="text-sm text-muted"
       >
-        {advanced ? "Hide paste-cookie fallback" : "Paste a session instead"}
+        {advanced ? "Hide cookie paste" : "Paste a session instead"}
       </button>
 
       {advanced && (

@@ -53,6 +53,13 @@ export async function playwrightStatus(): Promise<PlaywrightStatus> {
 }
 
 export async function startPlaywrightLogin(): Promise<PlaywrightStatus> {
+  if (process.env.VERCEL) {
+    return {
+      running: false,
+      error:
+        "Playwright cannot open a browser on Vercel. Paste a Cookie header from admin.stateaffairs.com, or run npm run sa:login on your computer and we will store that session in the database.",
+    };
+  }
   const current = await playwrightStatus();
   if (current.running) return current;
 

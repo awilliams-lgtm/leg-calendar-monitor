@@ -2,6 +2,7 @@ import { mkdir, readFile, unlink, writeFile } from "fs/promises";
 import path from "path";
 import { cacheFile } from "@/lib/cache-path";
 import { databaseUrl } from "@/lib/db";
+import { envVar } from "@/lib/env";
 
 export const SA_SESSION_TTL_MS = 24 * 60 * 60 * 1000;
 const META_KEY = "sa_session";
@@ -185,8 +186,8 @@ async function writeDbSession(session: SaSession) {
 }
 
 function envSession(): SaSession | null {
-  const cookie = process.env.SA_COOKIE?.trim() || "";
-  const bearer = process.env.SA_BEARER_TOKEN?.trim() || "";
+  const cookie = envVar("SA_COOKIE");
+  const bearer = envVar("SA_BEARER_TOKEN");
   if (!cookie && !bearer) return null;
   return {
     ...empty(),
@@ -269,7 +270,7 @@ export async function importPlaywrightSession(): Promise<SaSession> {
 
 export async function sessionStatus(opts?: { reload?: boolean }): Promise<SaSessionPublic> {
   const session = await loadSession(opts);
-  const fromEnv = Boolean(process.env.SA_COOKIE?.trim() || process.env.SA_BEARER_TOKEN?.trim());
+  const fromEnv = Boolean(envVar("SA_COOKIE") || envVar("SA_BEARER_TOKEN"));
   return publicView(session, {
     playwrightFound: await playwrightAuthAvailable(),
     fromEnv,

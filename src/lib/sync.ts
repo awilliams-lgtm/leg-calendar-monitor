@@ -12,6 +12,7 @@ import { formatGapAlert, notifyEmail, notifySlack } from "@/lib/notify";
 import { STATE_SOURCES, stateByCode } from "@/lib/states";
 import type { CalendarEvent, SyncResult } from "@/lib/types";
 import { databaseUrl } from "@/lib/db";
+import { envVar } from "@/lib/env";
 
 function afterIso(): string {
   const d = new Date();
@@ -50,7 +51,7 @@ export async function officialEventsFor(code: string): Promise<{ events: Calenda
 
   const vaIcsStale = src.code === "VA" && !collected.some((e) => (e.url || "").includes("liscdn"));
   const needOpenStates =
-    Boolean(process.env.OPENSTATES_API_KEY?.trim()) && (collected.length === 0 || vaIcsStale);
+    Boolean(envVar("OPENSTATES_API_KEY")) && (collected.length === 0 || vaIcsStale);
   if (needOpenStates) {
     try {
       const os = await fetchOpenStatesEvents(src.openstates, afterIso());

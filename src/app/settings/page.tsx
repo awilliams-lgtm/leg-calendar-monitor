@@ -63,10 +63,10 @@ function SettingsInner() {
       <div className="grid max-w-xl gap-2">
         {status ? (
           <>
-            <Flag ok={status.openstates} label="OPENSTATES_API_KEY" />
+            <Flag ok={status.openstates} label="Open States API (optional fallback)" />
             <Flag ok={status.stateAffairs} label="Shared State Affairs session" />
-            <Flag ok={status.cron} label="CRON_SECRET" />
-            <Flag ok={status.slack} label="SLACK_WEBHOOK_URL" />
+            <Flag ok={status.cron} label="Cron secret" />
+            <Flag ok={status.slack} label="Slack alerts" />
             <Flag ok={status.email} label="Resend email alerts" />
           </>
         ) : (
