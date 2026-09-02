@@ -3,6 +3,7 @@ import { mkdir, readFile, writeFile } from "fs/promises";
 import path from "path";
 import { NextRequest, NextResponse } from "next/server";
 import { jsonWithCors } from "@/lib/cors";
+import { envVar } from "@/lib/env";
 
 export const ADMIN_COOKIE = "sa_admin";
 const TTL_SEC = 30 * 24 * 60 * 60;
@@ -18,11 +19,11 @@ type AdminFile = {
 let memory: AdminFile | null | undefined;
 
 function envPassword(): string {
-  return process.env.ADMIN_PASSWORD?.trim() || "";
+  return envVar("ADMIN_PASSWORD");
 }
 
 function envUnlock(): string {
-  return envPassword() || process.env.ADMIN_SECRET?.trim() || process.env.INGEST_SECRET?.trim() || process.env.CRON_SECRET?.trim() || "";
+  return envPassword() || envVar("ADMIN_SECRET") || envVar("INGEST_SECRET") || envVar("CRON_SECRET");
 }
 
 async function readFileConfig(): Promise<AdminFile | null> {
@@ -64,7 +65,7 @@ export async function adminConfigured(): Promise<boolean> {
 }
 
 export async function setupAdminPassword(password: string): Promise<{ ok: boolean; error?: string }> {
-  if (process.env.VERCEL) return { ok: false, error: "Set ADMIN_PASSWORD in the server environment." };
+  if (envVar("VERCEL")) return { ok: false, error: "Set ADMIN_PASSWORD in the server environment." };
   if (password.trim().length < 8) return { ok: false, error: "Use at least 8 characters." };
   if (!(await adminSetupRequired())) return { ok: false, error: "An admin password is already set." };
   const salt = randomBytes(16).toString("hex");
@@ -147,7 +148,7 @@ export async function isAdminRequest(req: NextRequest): Promise<boolean> {
   if (key) {
     const env = envPassword();
     if (env && safeEqual(env, key)) return true;
-    const ingest = process.env.INGEST_SECRET?.trim() || process.env.CRON_SECRET?.trim() || "";
+    const ingest = envVar("INGEST_SECRET") || envVar("CRON_SECRET");
     if (ingest && safeEqual(ingest, key)) return true;
   }
 
@@ -168,7 +169,7 @@ export function applyAdminCookie(res: NextResponse, token: string) {
     sameSite: "lax",
     path: "/",
     maxAge: TTL_SEC,
-    secure: Boolean(process.env.VERCEL),
+    secure: Boolean(envVar("VERCEL")),
   });
   return res;
 }

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import {
+  adminConfigured,
   adminSetupRequired,
   applyAdminCookie,
   clearAdminCookie,
@@ -26,9 +27,9 @@ export async function POST(req: NextRequest) {
     action?: string;
     password?: string;
   };
-  const password = String(body.password || "");
+  const password = String(body.password || "").trim();
 
-  if (body.action === "setup") {
+  if (body.action === "setup" && (await adminSetupRequired())) {
     const created = await setupAdminPassword(password);
     if (!created.ok) {
       return NextResponse.json({ ok: false, error: created.error }, { status: 400 });
@@ -40,7 +41,16 @@ export async function POST(req: NextRequest) {
   }
 
   if (!(await verifyAdminPassword(password))) {
-    return NextResponse.json({ ok: false, error: "Wrong admin password." }, { status: 401 });
+    const configured = await adminConfigured();
+    return NextResponse.json(
+      {
+        ok: false,
+        error: configured
+          ? "Wrong admin password."
+          : "Admin password is not loaded on the server. Check ADMIN_PASSWORD in Vercel env vars.",
+      },
+      { status: 401 },
+    );
   }
   const token = await makeAdminToken();
   await markExtensionUnlock();
