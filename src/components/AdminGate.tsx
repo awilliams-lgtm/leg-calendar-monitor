@@ -14,10 +14,16 @@ export function AdminGate({ children }: { children: ReactNode }) {
   const [error, setError] = useState("");
 
   async function refresh() {
-    const res = await fetch("/api/admin/session", { credentials: "include" });
-    const data = await res.json();
-    setState({ admin: Boolean(data.admin), setupRequired: Boolean(data.setupRequired) });
-    return data as AdminState;
+    try {
+      const res = await fetch("/api/admin/session", { credentials: "include" });
+      const data = await res.json();
+      setState({ admin: Boolean(data.admin), setupRequired: Boolean(data.setupRequired) });
+      return data as AdminState;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not reach the admin login.");
+      setState({ admin: false, setupRequired: false });
+      return { admin: false, setupRequired: false };
+    }
   }
 
   useEffect(() => {

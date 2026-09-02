@@ -49,7 +49,7 @@ export function SiteHeader() {
           <span className="block text-xs font-normal text-muted">Legislative calendars</span>
         </Link>
         <nav className="flex flex-wrap items-center gap-1 text-sm font-medium">
-          {ALL_LINKS.filter((link) => !link.admin || admin).map((link) => {
+          {ALL_LINKS.map((link) => {
             const active =
               link.href === "/"
                 ? pathname === "/" || pathname.startsWith("/states/")
@@ -83,7 +83,14 @@ export function SiteHeader() {
             <span className="rounded-full bg-teal-soft px-3 py-1.5 text-xs font-semibold text-teal">
               SA connected
             </span>
-          ) : null}
+          ) : (
+            <Link
+              href="/settings"
+              className="rounded-full bg-[#f8eee6] px-3 py-1.5 text-xs font-semibold text-accent no-underline"
+            >
+              Admin login
+            </Link>
+          )}
         </nav>
       </div>
     </header>
