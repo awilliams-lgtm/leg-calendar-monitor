@@ -135,7 +135,8 @@ async function enrichHouseEvents(events: CalendarEvent[]): Promise<CalendarEvent
   return mapPool(events, 4, async (row) => {
     if (!/ByEvent\.aspx\?EventID=/i.test(row.url || "")) return row;
     try {
-      const extra = parseOfficialAgendaPage(await fetchText(row.url, 20000), row.url);
+      const pageUrl = row.url || "";
+      const extra = parseOfficialAgendaPage(await fetchText(pageUrl, 20000), pageUrl);
       return ev({
         ...row,
         bills: extra.bills.length ? extra.bills : row.bills,

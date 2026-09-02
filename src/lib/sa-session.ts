@@ -1,5 +1,6 @@
 import { mkdir, readFile, unlink, writeFile } from "fs/promises";
 import path from "path";
+import { cacheFile } from "@/lib/cache-path";
 import { databaseUrl } from "@/lib/db";
 
 export const SA_SESSION_TTL_MS = 24 * 60 * 60 * 1000;
@@ -44,14 +45,15 @@ const empty = (): SaSession => ({
 let memory: SaSession | null = null;
 
 export function sessionFilePath(): string {
-  return path.join(process.cwd(), "data", "sa-session.json");
+  return cacheFile("sa-session.json");
 }
 
 export function playwrightAuthPath(): string {
-  return path.join(process.cwd(), "data", "sa-auth.json");
+  return cacheFile("sa-auth.json");
 }
 
 export function playwrightAuthPaths(): string[] {
+  if (process.env.VERCEL) return [playwrightAuthPath()];
   const root = path.join(process.cwd(), "..");
   return [
     playwrightAuthPath(),
@@ -63,7 +65,7 @@ export function playwrightAuthPaths(): string[] {
 export async function playwrightAuthAvailable(): Promise<boolean> {
   for (const p of playwrightAuthPaths()) {
     try {
-      await readFile(p);
+      await readFile(/*turbopackIgnore: true*/ p);
       return true;
     } catch {
       /* missing */
@@ -137,7 +139,7 @@ function publicView(session: SaSession, extra: { playwrightFound: boolean; fromE
 
 async function readFileSession(): Promise<SaSession | null> {
   try {
-    const raw = await readFile(sessionFilePath(), "utf8");
+    const raw = await readFile(/*turbopackIgnore: true*/ sessionFilePath(), "utf8");
     const parsed = JSON.parse(raw) as Partial<SaSession>;
     return {
       ...empty(),
@@ -244,7 +246,7 @@ export async function clearSession() {
 export async function importPlaywrightSession(): Promise<SaSession> {
   for (const p of playwrightAuthPaths()) {
     try {
-      const raw = await readFile(p, "utf8");
+      const raw = await readFile(/*turbopackIgnore: true*/ p, "utf8");
       const json = JSON.parse(raw) as { cookies?: CookieLike[] };
       const cookie = cookiesToHeader(json.cookies || []);
       if (!cookie) continue;
