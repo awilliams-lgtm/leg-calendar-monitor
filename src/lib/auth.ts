@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
+import { envVar } from "@/lib/env";
 
 export function assertCron(req: NextRequest): NextResponse | null {
-  const secret = process.env.CRON_SECRET?.trim();
+  const secret = envVar("CRON_SECRET");
   if (!secret) return null;
   const auth = req.headers.get("authorization") || "";
   const query = req.nextUrl.searchParams.get("secret") || "";
@@ -10,7 +11,7 @@ export function assertCron(req: NextRequest): NextResponse | null {
 }
 
 export function assertIngest(req: NextRequest): NextResponse | null {
-  const secret = process.env.INGEST_SECRET?.trim() || process.env.CRON_SECRET?.trim();
+  const secret = envVar("INGEST_SECRET") || envVar("CRON_SECRET");
   if (!secret) {
     return NextResponse.json({ ok: false, error: "INGEST_SECRET is not set" }, { status: 401 });
   }

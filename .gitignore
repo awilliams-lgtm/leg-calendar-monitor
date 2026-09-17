@@ -11,3 +11,4 @@ data/
 tmp-*
 tmp2-*
 tsconfig.tsbuildinfo
+.env*

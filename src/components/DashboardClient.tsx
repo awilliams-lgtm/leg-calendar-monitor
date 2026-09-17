@@ -132,7 +132,17 @@ function Stat({ label, value, href }: { label: string; value: number; href?: str
   );
 }
 
-export function GapTable({ gaps, onDismiss }: { gaps: GapRow[]; onDismiss?: (id: number) => void }) {
+export function GapTable({
+  gaps,
+  onDismiss,
+  onIrrelevant,
+  onRestore,
+}: {
+  gaps: GapRow[];
+  onDismiss?: (id: number) => void;
+  onIrrelevant?: (id: number) => void;
+  onRestore?: (id: number) => void;
+}) {
   return (
     <div className="overflow-auto rounded-xl border border-border bg-panel">
       <table className="w-full min-w-[720px] text-left text-sm">
@@ -163,15 +173,35 @@ export function GapTable({ gaps, onDismiss }: { gaps: GapRow[]; onDismiss?: (id:
               </td>
               <td className="px-3 py-2 text-xs text-muted">{g.saMatchTitle || "—"}</td>
               <td className="px-3 py-2">
-                {onDismiss && g.status === "open" && (
-                  <button
-                    type="button"
-                    className="rounded border border-border px-2 py-1 text-xs"
-                    onClick={() => onDismiss(g.id)}
-                  >
-                    Mark as on SA
-                  </button>
-                )}
+                <div className="flex flex-wrap justify-end gap-1">
+                  {onDismiss && g.status === "open" && (
+                    <button
+                      type="button"
+                      className="rounded border border-border px-2 py-1 text-xs"
+                      onClick={() => onDismiss(g.id)}
+                    >
+                      Mark as on SA
+                    </button>
+                  )}
+                  {onIrrelevant && g.status === "open" && (
+                    <button
+                      type="button"
+                      className="rounded border border-border px-2 py-1 text-xs"
+                      onClick={() => onIrrelevant(g.id)}
+                    >
+                      Not relevant
+                    </button>
+                  )}
+                  {onRestore && g.status === "irrelevant" && (
+                    <button
+                      type="button"
+                      className="rounded border border-border px-2 py-1 text-xs"
+                      onClick={() => onRestore(g.id)}
+                    >
+                      Restore
+                    </button>
+                  )}
+                </div>
               </td>
             </tr>
           ))}

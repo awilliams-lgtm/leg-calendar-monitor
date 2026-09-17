@@ -2,7 +2,7 @@ import { mkdir, readFile, rename, stat, unlink, writeFile } from "fs/promises";
 import path from "path";
 import { cacheFile } from "@/lib/cache-path";
 import { eventDay } from "@/lib/dates";
-import { databaseUrl } from "@/lib/db";
+import { databaseUrl, hostedDatabase } from "@/lib/db";
 import { isHiddenMeeting } from "@/lib/hidden";
 import type { CalendarEvent } from "@/lib/types";
 
@@ -32,6 +32,14 @@ export function emptySaCache(): SaCache {
 }
 
 export async function loadSaCache(): Promise<SaCache> {
+  if (hostedDatabase()) {
+    if (memory && memory.events?.length) return memory;
+    const fromDb = await hydrateSaFromDb();
+    if (fromDb) {
+      memory = fromDb;
+      return memory;
+    }
+  }
   try {
     const info = await stat(FILE);
     if (memory && info.mtimeMs <= memoryMtime) return memory;
@@ -63,13 +71,23 @@ export async function loadSaCache(): Promise<SaCache> {
 async function hydrateSaFromDb(): Promise<SaCache | null> {
   if (!databaseUrl()) return null;
   try {
-    const { allEventsForSource } = await import("@/lib/data");
+    const { allEventsForSource, calendarFeedStats, getMeta } = await import("@/lib/data");
     const events = (await allEventsForSource("sa")).filter((e) => !isHiddenMeeting(e));
     if (!events.length) return null;
+    let scraped: string[] = [];
+    try {
+      const raw = await getMeta("sa_cache_scraped");
+      const parsed = raw ? (JSON.parse(raw) as unknown) : [];
+      if (Array.isArray(parsed)) scraped = parsed.map((code) => String(code || "").toUpperCase()).filter(Boolean);
+    } catch {
+      scraped = [];
+    }
+    if (!scraped.length) scraped = [...new Set(events.map((e) => e.state))];
+    const updatedAt = (await getMeta("sa_cache_updated_at")) || (await calendarFeedStats()).saUpdatedAt || "";
     return {
-      updatedAt: new Date().toISOString(),
+      updatedAt,
       scraping: false,
-      scraped: [...new Set(events.map((e) => e.state))],
+      scraped,
       events,
       needsBrowserFetch: false,
       error: "",
@@ -94,6 +112,15 @@ export async function saveSaCache(next: SaCache) {
     memoryMtime = (await stat(FILE)).mtimeMs;
   } catch {
     memoryMtime = Date.now();
+  }
+  if (databaseUrl()) {
+    try {
+      const { setMeta } = await import("@/lib/data");
+      await setMeta("sa_cache_updated_at", next.updatedAt || "");
+      await setMeta("sa_cache_scraped", JSON.stringify(next.scraped || []));
+    } catch {
+      /* file cache is enough locally */
+    }
   }
 }
 
@@ -165,12 +192,13 @@ export async function replaceSaEvents(state: string, events: CalendarEvent[], op
 }
 
 export async function mergeSaEvents(events: CalendarEvent[], scrapedStates: string[] = []) {
+  const incoming = events.filter((e) => e.title && e.start && e.sourceId && !isHiddenMeeting(e));
   const states = [
-    ...new Set([...events.map((e) => e.state), ...scrapedStates].map((s) => String(s || "").toUpperCase()).filter(Boolean)),
+    ...new Set([...incoming.map((e) => e.state), ...scrapedStates].map((s) => String(s || "").toUpperCase()).filter(Boolean)),
   ];
   const cache = await loadSaCache();
   cache.events = cache.events.filter((e) => !states.includes(e.state));
-  cache.events.push(...events.filter((e) => e.title && e.start && e.sourceId && !isHiddenMeeting(e)));
+  cache.events.push(...incoming);
   for (const state of states) {
     if (!cache.scraped.includes(state)) cache.scraped.push(state);
   }
@@ -178,6 +206,17 @@ export async function mergeSaEvents(events: CalendarEvent[], scrapedStates: stri
   cache.error = "";
   cache.needsBrowserFetch = false;
   await saveSaCache(cache);
+  if (databaseUrl() && states.length) {
+    try {
+      const { upsertEvents } = await import("@/lib/data");
+      const byState = saByStateMap(incoming);
+      for (const state of states) {
+        await upsertEvents("sa", state, byState.get(state) || []);
+      }
+    } catch (err) {
+      if (hostedDatabase()) throw err;
+    }
+  }
   return cache;
 }
 

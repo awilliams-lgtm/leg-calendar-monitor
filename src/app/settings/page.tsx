@@ -83,10 +83,13 @@ function SettingsInner() {
           <strong>Capture this official calendar</strong> in the connector popup. Use this for Hawaii,
           New York Senate, Arizona, New Jersey, and other pages that return 403 or a blank shell.
         </p>
-        <h2 className="pt-4 text-xl">Manual sync</h2>
+        <h2 className="pt-4 text-xl">Unattended refresh</h2>
         <p className="text-muted">
-          GET <code>/api/cron/tick?states=all</code> pulls every official calendar. Or pass a list like{" "}
-          <code>?states=TX,CA,NY</code>. Send <code>Authorization: Bearer $CRON_SECRET</code>.
+          Production cron hits <code>/api/cron/tick</code> every hour from 7am to 5pm Eastern. That
+          keeps official calendars current and reuses the shared State Affairs session, including any
+          renewed cookies. On your work PC, <code>npm run sa:keep:install</code> adds a Windows task
+          that can push a fresh browser login if Cloudflare Access expires. Manual: GET{" "}
+          <code>/api/cron/tick?states=all</code> with <code>Authorization: Bearer $CRON_SECRET</code>.
         </p>
         <h2 className="pt-4 text-xl">Push SA hearings from the existing scraper</h2>
         <p className="text-muted">

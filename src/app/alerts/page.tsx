@@ -9,7 +9,7 @@ export default function AlertsPage() {
   const [error, setError] = useState("");
 
   const load = useCallback(async () => {
-    const res = await fetch("/api/alerts");
+    const res = await fetch("/api/alerts", { cache: "no-store" });
     const data = await res.json();
     if (!res.ok) {
       setError(data.error || "Failed to load alerts");

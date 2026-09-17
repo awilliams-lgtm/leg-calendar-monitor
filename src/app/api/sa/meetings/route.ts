@@ -54,18 +54,49 @@ export async function OPTIONS(req: NextRequest) {
 }
 
 export async function GET(req: NextRequest) {
-  const cache = await loadSaCache();
   const connected = await saConfigured();
   const status = await sessionStatus();
   const admin = await isAdminRequest(req);
+  const extra = {
+    account: admin ? status.name || status.email || "" : "",
+    graphql: admin ? SA_CLIENT_QUERIES : undefined,
+    states: admin ? STATE_SOURCES.map((s) => s.code) : [],
+  };
+
+  try {
+    const { calendarFeedStats } = await import("@/lib/data");
+    const { databaseUrl } = await import("@/lib/db");
+    if (databaseUrl()) {
+      const feed = await calendarFeedStats();
+      return jsonWithCors(req, {
+        ok: true,
+        connected: connected || feed.saEvents > 0,
+        stale: false,
+        updatedAt: feed.saUpdatedAt,
+        scraping: false,
+        scraped: feed.saStates,
+        scrapedCodes: [],
+        total: STATE_SOURCES.length,
+        events: feed.saEvents,
+        upcomingFrom: "",
+        upcomingTo: "",
+        upcoming: feed.upcoming,
+        needsBrowserFetch: false,
+        error: "",
+        ...extra,
+      });
+    }
+  } catch {
+    /* file cache is enough locally */
+  }
+
+  const cache = await loadSaCache();
   return jsonWithCors(req, {
     ok: true,
     connected,
     stale: saCacheStale(cache),
-    account: admin ? status.name || status.email || "" : "",
-    graphql: admin ? SA_CLIENT_QUERIES : undefined,
-    states: admin ? STATE_SOURCES.map((s) => s.code) : [],
     ...publicSa(cache),
+    ...extra,
   });
 }
 

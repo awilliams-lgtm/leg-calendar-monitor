@@ -22,7 +22,15 @@ export const dynamic = "force-dynamic";
 type CookieLike = { name?: string; value?: string; domain?: string };
 
 async function persistAndCheck(req: NextRequest, session: SaSession, status = 200) {
-  await saveSession(session);
+  try {
+    await saveSession(session);
+  } catch (err) {
+    return jsonWithCors(
+      req,
+      { ok: false, error: err instanceof Error ? err.message : String(err) },
+      { status: 500 },
+    );
+  }
   try {
     const profile = await fetchSaProfile();
     return jsonWithCors(req, { ok: true, profile, ...(await sessionStatus()) }, { status });
@@ -70,8 +78,6 @@ export async function GET(req: NextRequest) {
       ok: false,
       hosted: Boolean(process.env.VERCEL),
       ...next,
-      connected: false,
-      needsLogin: true,
       playwright,
       error: err instanceof Error ? err.message : String(err),
     });
@@ -103,7 +109,7 @@ export async function POST(req: NextRequest) {
 
     if (body.action === "import") {
       const session = await importPlaywrightSession();
-      return persistAndCheck(req, session);
+      return await persistAndCheck(req, session);
     }
 
     if (body.action === "playwright") {
@@ -128,13 +134,13 @@ export async function POST(req: NextRequest) {
     const session: SaSession = {
       ...current,
       cookie,
-      bearer,
-      source: browserSync ? "browser" : "paste",
+      bearer: bearer || parsed.bearer,
+      source: browserSync ? "browser" : body.source === "playwright" ? "playwright" : "paste",
       savedAt: new Date().toISOString(),
       lastOkAt: "",
-      promptDaily: body.promptDaily !== false,
+      promptDaily: body.promptDaily === true,
     };
-    return persistAndCheck(req, session);
+    return await persistAndCheck(req, session);
   } catch (err) {
     return jsonWithCors(
       req,

@@ -3,15 +3,15 @@ import { parseIcsText } from "@/lib/adapters/ics";
 import { fetchCongressMeetings } from "@/lib/adapters/official-congress";
 import { extractBills } from "@/lib/match";
 import { absUrl, decodeEntities, fetchJson, fetchText, fetchTextPost, mapPool, MONTHS, parseHumanDate, stripTags, toIso } from "@/lib/html";
+import { mergeOfficialEvent } from "@/lib/official-merge";
 import { fetchPdfText } from "@/lib/pdf-text";
 import { upcomingWindow } from "@/lib/dates";
 import { STATE_SOURCES, type StateSource } from "@/lib/states";
-import { isHiddenMeeting } from "@/lib/hidden";
-import { cleanOfficialTitle, junkOfficialTitle } from "@/lib/title";
+import { cleanOfficialTitle, completeOfficialTitle, junkOfficialEvent, junkOfficialTitle, withChamberLabel } from "@/lib/title";
 import type { CalendarEvent } from "@/lib/types";
 
 function ev(partial: Omit<CalendarEvent, "bills" | "state"> & { state: string; bills?: string[] }): CalendarEvent {
-  const title = cleanOfficialTitle(partial.title);
+  const title = cleanOfficialTitle(completeOfficialTitle(partial.title, partial.location, partial.description));
   const bills = partial.bills?.length ? partial.bills : extractBills(`${title}\n${partial.description || ""}`);
   return { ...partial, title, bills };
 }
@@ -21,7 +21,7 @@ function hashId(state: string, start: string, title: string): string {
 }
 
 function usable(e: CalendarEvent): boolean {
-  return Boolean(e.title && e.start) && !junkOfficialTitle(e.title) && !isHiddenMeeting(e);
+  return !junkOfficialEvent(e);
 }
 
 function collapseSameDayTitle(rows: CalendarEvent[]): CalendarEvent[] {
@@ -121,11 +121,11 @@ export async function fetchOfficialApis(src: StateSource): Promise<{ events: Cal
 
   if (code === "WI") {
     try {
-      const rows = await fetchRssEvents("https://docs.legis.wisconsin.gov/feed/2025/related/hearings", "WI");
+      const rows = await fetchWiCommitteeSchedule();
       events.push(...rows);
-      notes.push(`WI rss → ${rows.length}`);
+      notes.push(`WI committee schedule → ${rows.length}`);
     } catch (err) {
-      notes.push(`WI rss failed: ${err instanceof Error ? err.message : String(err)}`);
+      notes.push(`WI committee schedule failed: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 
@@ -153,7 +153,7 @@ export async function fetchOfficialApis(src: StateSource): Promise<{ events: Cal
     try {
       const rows = await fetchRiCalendar();
       events.push(...rows);
-      notes.push(`RI legislative calendar → ${rows.length}`);
+      notes.push(`RI homepage dots + committee calendar → ${rows.length}`);
     } catch (err) {
       notes.push(`RI legislative calendar failed: ${err instanceof Error ? err.message : String(err)}`);
     }
@@ -293,7 +293,7 @@ export async function fetchOfficialApis(src: StateSource): Promise<{ events: Cal
     try {
       const rows = await fetchVtMeetings();
       events.push(...rows);
-      notes.push(`VT meetings api → ${rows.length}`);
+      notes.push(`VT floor + standing + other meetings → ${rows.length}`);
     } catch (err) {
       notes.push(`VT meetings api failed: ${err instanceof Error ? err.message : String(err)}`);
     }
@@ -303,7 +303,7 @@ export async function fetchOfficialApis(src: StateSource): Promise<{ events: Cal
     try {
       const rows = await fetchNmMeetings();
       events.push(...rows);
-      notes.push(`NM what's happening → ${rows.length}`);
+      notes.push(`NM what's happening + session → ${rows.length}`);
     } catch (err) {
       notes.push(`NM what's happening failed: ${err instanceof Error ? err.message : String(err)}`);
     }
@@ -406,6 +406,16 @@ export async function fetchOfficialApis(src: StateSource): Promise<{ events: Cal
       notes.push(`UT interim calendar → ${rows.length}`);
     } catch (err) {
       notes.push(`UT interim calendar failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  if (code === "PA") {
+    try {
+      const rows = await fetchPaMeetings();
+      events.push(...rows);
+      notes.push(`PA committee calendars → ${rows.length}`);
+    } catch (err) {
+      notes.push(`PA committee calendars failed: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 
@@ -534,6 +544,8 @@ export function parseExtraByState(code: string, html: string, pageUrl: string): 
       return parseOkSenate(html, pageUrl);
     case "UT":
       return parseUt(html, pageUrl);
+    case "VT":
+      return parseVtHtml(html, pageUrl);
     case "CT":
       return parseCt(html, pageUrl);
     case "ME":
@@ -811,17 +823,9 @@ async function gaMeetingsFrom(auth: string, startDate: string): Promise<GaMeetin
 
 export async function fetchGaMeetings(): Promise<CalendarEvent[]> {
   const auth = await gaAuthHeader();
-  const today = new Date();
-  const startDates = [
-    gaMonthStart(1),
-    gaMonthStart(0),
-    `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`,
-    gaMonthStart(-1),
-  ];
-  const rows: GaMeeting[] = [];
-  for (const startDate of [...new Set(startDates)]) {
-    rows.push(...(await gaMeetingsFrom(auth, startDate)));
-  }
+  const startDates = [...new Set([gaMonthStart(0), gaMonthStart(-1)])];
+  const pages = await mapPool(startDates, 2, (startDate) => gaMeetingsFrom(auth, startDate));
+  const rows = pages.flat();
   const byId = new Map<string, CalendarEvent>();
   for (const row of rows) {
     const id = String(row.id || "").trim();
@@ -1643,17 +1647,29 @@ function parseFlCalendars(html: string, pageUrl: string): CalendarEvent[] {
     const rowRe = /<tr\b[^>]*>([\s\S]*?)<\/tr>/gi;
     let row: RegExpExecArray | null;
     while ((row = rowRe.exec(body))) {
+      if (/<th\b/i.test(row[1]) && !/<td\b/i.test(row[1])) continue;
       const cells = [...row[1].matchAll(/<(?:td|th)[^>]*>([\s\S]*?)<\/(?:td|th)>/gi)].map((c) =>
         stripTags(c[1]),
       );
       if (cells.length < 2) continue;
-      const title = cleanOfficialTitle(cells.find((c) => c.length > 8 && !parseHumanDate(c)) || "");
+      const title = cleanOfficialTitle(
+        cells
+          .filter((c) => c.length > 4 && !parseHumanDate(c) && !/^\d{1,2}:\d{2}/.test(c) && !/^start time\b/i.test(c))
+          .sort((a, b) => b.length - a.length)[0] || "",
+      );
       if (!title || junkOfficialTitle(title)) continue;
+      const href = row[1].match(/href="([^"]+)"/i)?.[1] || "";
+      if (/VideoPlayer\.aspx/i.test(href) && !/MeetingId=/i.test(href)) continue;
+      if (
+        !/MeetingId=/i.test(href) &&
+        !/\b(committee|commission|subcommittee|session|hearing|caucus|briefing)\b/i.test(title)
+      ) {
+        continue;
+      }
       const time = cells.join(" ").match(/\d{1,2}:\d{2}\s*[ap]m/i)?.[0];
       const start = toIso(parsed.y, parsed.m, parsed.d, time);
       const id = hashId("FL", start, title);
       if (byId.has(id)) continue;
-      const href = row[1].match(/href="([^"]+)"/i)?.[1];
       byId.set(
         id,
         ev({
@@ -1737,52 +1753,575 @@ type VtMeeting = {
   CommitteeMeetingID?: string;
   CommName?: string;
   LongName?: string;
-  StartTime?: string;
-  TimeSlot?: string;
+  StartTime?: string | number;
+  TimeSlot?: string | number;
   Room?: string;
   BuildingName?: string;
   CommitteeType?: string;
+  StandardDate?: string;
+  Published?: string | number;
+  PermanentID?: string;
 };
 
-export async function fetchVtMeetings(): Promise<CalendarEvent[]> {
-  const byId = new Map<string, CalendarEvent>();
-  for (const path of ["loadAllMeetings", "loadStudyMeetings"]) {
-    try {
-      const payload = await fetchJson<{ data?: VtMeeting[] }>(
-        `https://legislature.vermont.gov/committee/${path}/2026`,
-      );
-      for (const row of payload.data || []) {
-        const title = cleanOfficialTitle(row.LongName || row.CommName || "");
-        const parsed = parseHumanDate(row.MeetingDate || "");
-        if (!title || !parsed || junkOfficialTitle(title)) continue;
-        const time = row.StartTime || row.TimeSlot || "";
-        const start = toIso(parsed.y, parsed.m, parsed.d, time);
-        const id = row.CommitteeMeetingID ? `vt-${row.CommitteeMeetingID}` : hashId("VT", start, title);
-        if (byId.has(id)) continue;
-        const kind = (row.CommitteeType || "").toLowerCase();
-        byId.set(
-          id,
-          ev({
-            sourceId: id,
-            state: "VT",
-            title,
-            start,
-            location: [row.BuildingName, row.Room].filter(Boolean).join(" "),
-            chamber: kind.includes("senate") ? "senate" : kind.includes("house") ? "house" : "joint",
-            url: row.CommitteeMeetingID
-              ? `https://legislature.vermont.gov/committee/agenda/2026/${row.CommitteeMeetingID}`
-              : "https://legislature.vermont.gov/committee/meetings/2026",
-          }),
-        );
-      }
-    } catch {
-      /* one endpoint can fail */
+function vtPad(n: number): string {
+  return String(n).padStart(2, "0");
+}
+
+function vtDayKey(parsed: { y: number; m: number; d: number }): string {
+  return `${parsed.y}-${vtPad(parsed.m)}-${vtPad(parsed.d)}`;
+}
+
+function vtDayInWindow(day: string, now = new Date()): boolean {
+  const window = upcomingWindow(now);
+  const lookback = new Date(now);
+  lookback.setDate(lookback.getDate() - 2);
+  const from = `${lookback.getFullYear()}-${vtPad(lookback.getMonth() + 1)}-${vtPad(lookback.getDate())}`;
+  return Boolean(day && day >= from && day <= window.to);
+}
+
+function vtClock(raw: unknown): string {
+  if (typeof raw === "number") return "";
+  const text = String(raw || "").trim();
+  if (!text || text === "1") return "";
+  return clockTime(text);
+}
+
+/** Standing committees in session: TimeSlot/StartTime of 1 means "see this week's agenda PDF". */
+function vtStandingPlaceholder(row: VtMeeting): boolean {
+  return String(row.TimeSlot) === "1" && String(row.StartTime) === "1";
+}
+
+const VT_DAY_RE =
+  /\b(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday),\s+(January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},\s+\d{4}\b/gi;
+
+function vtFirstCommitteeTime(text: string): string {
+  const plain = stripTags(text.replace(/<br\s*\/?>/gi, "\n"));
+  const re = /(\d{1,2}:\d{2}\s*[AP]M)\s+([^0-9]{2,120}?)(?=\d{1,2}:\d{2}\s*[AP]M|$)/gi;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(plain))) {
+    const label = m[2].replace(/\s+/g, " ").trim();
+    if (/^(house floor|senate floor|lunch|break|adjourn|recess|caucus|after floor)\b/i.test(label)) continue;
+    return clockTime(m[1]);
+  }
+  return "";
+}
+
+function parseVtPublishedAgenda(raw: string, committeeTitle: string, pageUrl: string, year: number): CalendarEvent[] {
+  const title = cleanOfficialTitle(committeeTitle);
+  if (!title || junkOfficialTitle(title) || /not yet been published/i.test(raw)) return [];
+  const chamber = chamberFromTitle(title, /^senate\b/i.test(title) ? "senate" : /^house\b/i.test(title) ? "house" : "joint");
+  const days: { label: string; index: number }[] = [];
+  const weekdayRe = new RegExp(VT_DAY_RE.source, "gi");
+  let m: RegExpExecArray | null;
+  while ((m = weekdayRe.exec(raw))) days.push({ label: m[0], index: m.index });
+  if (!days.length) {
+    const namedRe =
+      /\b(January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},\s+\d{4}\b/gi;
+    while ((m = namedRe.exec(raw))) {
+      const before = raw.slice(Math.max(0, m.index - 24), m.index);
+      if (/last updated/i.test(before)) continue;
+      days.push({ label: m[0], index: m.index });
     }
+  }
+  const out: CalendarEvent[] = [];
+  for (let i = 0; i < days.length; i++) {
+    const parsed = parseHumanDate(days[i].label, year);
+    if (!parsed) continue;
+    const slice = raw.slice(days[i].index, days[i + 1]?.index ?? raw.length);
+    const time = vtFirstCommitteeTime(slice);
+    if (!time) continue;
+    const start = toIso(parsed.y, parsed.m, parsed.d, time);
+    out.push(
+      ev({
+        sourceId: hashId("VT", start, title),
+        state: "VT",
+        title,
+        start,
+        location: stripTags(slice.match(/Room\s+\d+|Small Hearing Room|Large Hearing Room|Zoom/i)?.[0] || ""),
+        chamber,
+        url: pageUrl,
+      }),
+    );
+  }
+  return out;
+}
+
+function parseVtWeeklyHtml(html: string, pageUrl: string): CalendarEvent[] {
+  const content = html.match(/id="agendacontent"[\s\S]*?<\/td>/i)?.[0] || html;
+  const year = Number(pageUrl.match(/\/(\d{4})/)?.[1] || new Date().getFullYear());
+  const out: CalendarEvent[] = [];
+  for (const block of content.split(/<hr\s*\/?>/i)) {
+    const heading = cleanOfficialTitle(stripTags(block.match(/<h2[^>]*>([\s\S]*?)<\/h2>/i)?.[1] || ""));
+    if (!heading || /standing committee meetings/i.test(heading)) continue;
+    out.push(...parseVtPublishedAgenda(block, heading, pageUrl, year));
+  }
+  return out;
+}
+
+async function fetchVtWeeklyAgendas(session: number): Promise<CalendarEvent[]> {
+  const pageUrl = `https://legislature.vermont.gov/committee/weeklyAgendas/${session}`;
+  const html = await fetchText(pageUrl, 20000, { Referer: `https://legislature.vermont.gov/committee/meetings/${session}` });
+  const events = parseVtWeeklyHtml(html, pageUrl);
+  const meetingsUrl = `https://legislature.vermont.gov/committee/meetings/${session}`;
+  let meetingsHtml = "";
+  try {
+    meetingsHtml = await fetchText(meetingsUrl, 18000, { Referer: meetingsUrl });
+  } catch {
+    return events;
+  }
+  const byId = new Map(events.map((e) => [e.sourceId, e]));
+  const rowRe =
+    /<tr[^>]*>\s*<td class="text-center">([\s\S]*?)<\/td>\s*<td>\s*<a href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi;
+  const pdfs: { href: string; title: string }[] = [];
+  let row: RegExpExecArray | null;
+  while ((row = rowRe.exec(meetingsHtml))) {
+    const agendaHref = row[1].match(/href="([^"]+)"/i)?.[1] || "";
+    const title = cleanOfficialTitle(stripTags(row[3]));
+    if (!agendaHref || !title) continue;
+    const href = absUrl(meetingsUrl, agendaHref);
+    if (/\.pdf($|\?)/i.test(href)) pdfs.push({ href, title });
+    else if (/\/committee\/agenda\//i.test(href)) {
+      try {
+        const page = await fetchText(href, 15000, { Referer: meetingsUrl });
+        for (const evRow of parseVtPublishedAgenda(page, title, href, session)) {
+          if (!byId.has(evRow.sourceId)) byId.set(evRow.sourceId, evRow);
+        }
+      } catch {
+        /* unpublished or blocked agenda page */
+      }
+    }
+  }
+  const extra = await mapPool(pdfs.slice(0, 16), 3, async (item) => {
+    try {
+      return parseVtPublishedAgenda(await fetchPdfText(item.href, 20000), item.title, item.href, session);
+    } catch {
+      return [] as CalendarEvent[];
+    }
+  });
+  for (const list of extra) {
+    for (const evRow of list) {
+      if (!byId.has(evRow.sourceId)) byId.set(evRow.sourceId, evRow);
+    }
+  }
+  return [...byId.values()];
+}
+
+function vtFloorStamp(url: string): { chamber: "house" | "senate"; y: number; m: number; d: number; addendum: boolean } | null {
+  const m = url.match(/\/([hs])c(\d{2})(\d{2})(\d{2})(a)?\.pdf/i);
+  if (!m) return null;
+  return {
+    chamber: m[1].toLowerCase() === "s" ? "senate" : "house",
+    y: 2000 + Number(m[2]),
+    m: Number(m[3]),
+    d: Number(m[4]),
+    addendum: Boolean(m[5]),
+  };
+}
+
+function parseVtFloorPdf(
+  text: string,
+  pageUrl: string,
+  chamber: "house" | "senate",
+  stamp: { y: number; m: number; d: number },
+): CalendarEvent | null {
+  const convene = text.match(/convenes?\s+at\s+(\d{1,2}:\d{2}\s*[ap]\.?\s*m\.?)/i)?.[1] || "";
+  const clock = clockTime(convene.replace(/\./g, " "));
+  const title = chamber === "senate" ? "Senate Floor Session" : "House Floor Session";
+  const start = toIso(stamp.y, stamp.m, stamp.d, clock);
+  return ev({
+    sourceId: hashId("VT", start, title),
+    state: "VT",
+    title,
+    start,
+    chamber,
+    url: pageUrl,
+  });
+}
+
+async function fetchVtFloorCalendars(session: number): Promise<CalendarEvent[]> {
+  const pages = [
+    { url: `https://legislature.vermont.gov/house/service/${session}/calendar`, chamber: "house" as const },
+    { url: `https://legislature.vermont.gov/senate/service/${session}/calendar`, chamber: "senate" as const },
+  ];
+  const byId = new Map<string, CalendarEvent>();
+  for (const page of pages) {
+    let html = "";
+    try {
+      html = await fetchText(page.url, 18000);
+    } catch {
+      continue;
+    }
+    const seen = new Set<string>();
+    const recent: Array<{ href: string; stamp: { y: number; m: number; d: number; chamber: "house" | "senate" } }> = [];
+    for (const m of html.matchAll(/href="([^"]*Docs\/CALENDAR\/[hs]c\d{6}(?:a)?\.pdf[^"]*)"/gi)) {
+      const href = absUrl(page.url, m[1]).split("?")[0];
+      const stamp = vtFloorStamp(href);
+      if (!stamp || stamp.addendum || seen.has(href)) continue;
+      const day = vtDayKey(stamp);
+      if (!vtDayInWindow(day)) continue;
+      seen.add(href);
+      recent.push({ href, stamp: { y: stamp.y, m: stamp.m, d: stamp.d, chamber: stamp.chamber } });
+    }
+    recent.sort((a, b) => vtDayKey(b.stamp).localeCompare(vtDayKey(a.stamp)));
+    const pulled = await mapPool(recent.slice(0, 6), 2, async (item) => {
+      try {
+        return parseVtFloorPdf(await fetchPdfText(item.href, 20000), item.href, item.stamp.chamber, item.stamp);
+      } catch {
+        return null;
+      }
+    });
+    for (const row of pulled) {
+      if (row) byId.set(row.sourceId, row);
+    }
+  }
+  return [...byId.values()];
+}
+
+async function fetchVtStandingCommitteeAgendas(session: number, placeholders: VtMeeting[]): Promise<CalendarEvent[]> {
+  let rows: Array<{ PermanentID?: string; Type?: string; Inactive?: string; shortCommitteeName?: string; CommitteeName?: string }> = [];
+  try {
+    const payload = await fetchJson<{ data?: typeof rows }>(`https://legislature.vermont.gov/committee/loadList/${session}/`, 18000, {
+      Referer: `https://legislature.vermont.gov/committee/list/${session}/House-Standing`,
+    });
+    rows = payload.data || [];
+  } catch {
+    return [];
+  }
+  const standing = rows.filter((r) => /Standing/i.test(r.Type || "") && String(r.Inactive) !== "1" && r.PermanentID);
+  const byId = new Map(standing.map((r) => [String(r.PermanentID), r]));
+  const window = upcomingWindow();
+  const needed = new Map<string, string>();
+  for (const row of placeholders) {
+    if (!vtStandingPlaceholder(row)) continue;
+    const parsed = parseHumanDate(row.MeetingDate || "") || vtFromUnix(row.StandardDate);
+    if (!parsed) continue;
+    const day = vtDayKey(parsed);
+    if (day < window.from || day > window.to) continue;
+    const id = String(row.PermanentID || "");
+    const listed = id ? byId.get(id) : standing.find((r) => {
+      const name = (r.shortCommitteeName || r.CommitteeName || "").toLowerCase();
+      const want = (row.LongName || row.CommName || "").toLowerCase();
+      return name && want && (name === want || want.includes(name) || name.includes(want));
+    });
+    const permanentId = String(listed?.PermanentID || id || "");
+    if (!permanentId) continue;
+    needed.set(permanentId, listed?.shortCommitteeName || listed?.CommitteeName || row.LongName || row.CommName || "");
+  }
+  if (!needed.size) return [];
+  const pages = await mapPool([...needed.entries()], 4, async ([id, title]) => {
+    const pageUrl = `https://legislature.vermont.gov/committee/detail/${session}/${id}`;
+    try {
+      const html = await fetchText(pageUrl, 15000, { Referer: `https://legislature.vermont.gov/committee/list/${session}/House-Standing` });
+      const hrefs = [
+        ...[...html.matchAll(/href="([^"]+\.pdf[^"]*)"/gi)].map((m) => absUrl(pageUrl, m[1])),
+        ...[...html.matchAll(/href="([^"]*\/committee\/agenda\/[^"]+)"/gi)].map((m) => absUrl(pageUrl, m[1])),
+      ].filter((u, i, all) => all.indexOf(u) === i && /weekly|\/agenda/i.test(u) && !/witness/i.test(u));
+      const out: CalendarEvent[] = [];
+      for (const href of hrefs.slice(0, 3)) {
+        try {
+          const raw = /\.pdf($|\?)/i.test(href) ? await fetchPdfText(href, 15000) : await fetchText(href, 12000);
+          out.push(...parseVtPublishedAgenda(raw, title, href, session));
+        } catch {
+          /* unpublished weekly pdf */
+        }
+      }
+      return out;
+    } catch {
+      return [] as CalendarEvent[];
+    }
+  });
+  return pages.flat();
+}
+
+async function enrichVtMeetingAgendas(rows: VtMeeting[], session: number): Promise<CalendarEvent[]> {
+  const window = upcomingWindow();
+  const upcoming = rows.filter((row) => {
+    if (!row.CommitteeMeetingID || vtStandingPlaceholder(row)) return false;
+    const parsed = parseHumanDate(row.MeetingDate || "") || vtFromUnix(row.StandardDate);
+    if (!parsed) return false;
+    const day = vtDayKey(parsed);
+    return day >= window.from && day <= window.to;
+  }).slice(0, 24);
+  const pages = await mapPool(upcoming, 4, async (row) => {
+    const href = `https://legislature.vermont.gov/committee/agenda/${session}/${row.CommitteeMeetingID}`;
+    const title = row.LongName || row.CommName || "";
+    try {
+      const html = await fetchText(href, 12000, { Referer: `https://legislature.vermont.gov/committee/meetings/${session}` });
+      if (/not yet been published/i.test(html)) return [] as CalendarEvent[];
+      const out = parseVtPublishedAgenda(html, title, href, session);
+      const pdfs = [...html.matchAll(/href="([^"]+\.pdf[^"]*)"/gi)]
+        .map((m) => absUrl(href, m[1]))
+        .filter((u) => /agenda|weekly|calendar/i.test(u))
+        .slice(0, 2);
+      for (const pdf of pdfs) {
+        try {
+          out.push(...parseVtPublishedAgenda(await fetchPdfText(pdf, 15000), title, pdf, session));
+        } catch {
+          /* agenda html is enough */
+        }
+      }
+      return out;
+    } catch {
+      return [] as CalendarEvent[];
+    }
+  });
+  return pages.flat();
+}
+
+function vtFromUnix(raw?: string): { y: number; m: number; d: number } | null {
+  const n = Number(raw || 0);
+  if (!n) return null;
+  const d = new Date(n * 1000);
+  if (Number.isNaN(d.getTime())) return null;
+  return { y: d.getUTCFullYear(), m: d.getUTCMonth() + 1, d: d.getUTCDate() };
+}
+
+function parseVtHtml(html: string, pageUrl: string): CalendarEvent[] {
+  const byId = new Map<string, CalendarEvent>();
+  const year = Number(pageUrl.match(/\/(\d{4})/)?.[1] || new Date().getFullYear());
+  const rowRe = /<tr[^>]*>([\s\S]*?)<\/tr>/gi;
+  let row: RegExpExecArray | null;
+  while ((row = rowRe.exec(html))) {
+    const cells = [...row[1].matchAll(/<t[dh][^>]*>([\s\S]*?)<\/t[dh]>/gi)].map((c) => stripTags(c[1]));
+    if (cells.length < 3) continue;
+    const parsed = parseHumanDate(cells.join(" ")) || parseHumanDate(cells[0] || "");
+    const title = cleanOfficialTitle(cells.find((c) => /committee|house|senate|joint|oversight|study/i.test(c) && !parseHumanDate(c)) || "");
+    if (!parsed || !title || junkOfficialTitle(title)) continue;
+    const time = clockTime(cells.find((c) => /\d{1,2}:\d{2}\s*[ap]m/i.test(c)) || "");
+    const start = toIso(parsed.y || year, parsed.m, parsed.d, time);
+    const id = hashId("VT", start, title);
+    if (byId.has(id)) continue;
+    const agenda = row[1].match(/href="([^"]*agenda[^"]*)"/i)?.[1];
+    byId.set(
+      id,
+      ev({
+        sourceId: id,
+        state: "VT",
+        title,
+        start,
+        chamber: chamberFromTitle(title, "joint"),
+        url: agenda ? absUrl(pageUrl, agenda) : pageUrl,
+      }),
+    );
   }
   return [...byId.values()].filter(usable);
 }
 
+export async function fetchVtMeetings(): Promise<CalendarEvent[]> {
+  const year = new Date().getFullYear();
+  const years = [...new Set([year, 2026])];
+  const byId = new Map<string, CalendarEvent>();
+  const add = (rows: CalendarEvent[]) => {
+    for (const e of rows.filter(usable)) {
+      if (e.sourceId && !byId.has(e.sourceId)) byId.set(e.sourceId, e);
+    }
+  };
+  for (const session of years) {
+    const referer = { Referer: `https://legislature.vermont.gov/committee/meetings/${session}` };
+    const jsonRows: VtMeeting[] = [];
+    for (const path of ["loadAllMeetings", "loadStudyMeetings"]) {
+      try {
+        const payload = await fetchJson<{ data?: VtMeeting[] }>(
+          `https://legislature.vermont.gov/committee/${path}/${session}`,
+          18000,
+          referer,
+        );
+        for (const row of payload.data || []) {
+          jsonRows.push(row);
+          if (vtStandingPlaceholder(row)) continue;
+          const title = cleanOfficialTitle(row.LongName || row.CommName || "");
+          const parsed = parseHumanDate(row.MeetingDate || "") || vtFromUnix(row.StandardDate);
+          if (!title || !parsed || junkOfficialTitle(title)) continue;
+          const start = toIso(parsed.y, parsed.m, parsed.d, vtClock(row.StartTime) || vtClock(row.TimeSlot));
+          const id = row.CommitteeMeetingID ? `vt-${row.CommitteeMeetingID}` : hashId("VT", start, title);
+          if (byId.has(id)) continue;
+          const kind = (row.CommitteeType || "").toLowerCase();
+          byId.set(
+            id,
+            ev({
+              sourceId: id,
+              state: "VT",
+              title,
+              start,
+              location: [row.BuildingName, row.Room].filter(Boolean).join(" "),
+              chamber: kind.includes("senate") ? "senate" : kind.includes("house") ? "house" : "joint",
+              url: row.CommitteeMeetingID
+                ? `https://legislature.vermont.gov/committee/agenda/${session}/${row.CommitteeMeetingID}`
+                : `https://legislature.vermont.gov/committee/meetings/${session}#leg-committees`,
+            }),
+          );
+        }
+      } catch {
+        /* one endpoint can fail */
+      }
+    }
+    try {
+      add(parseVtHtml(await fetchText(`https://legislature.vermont.gov/committee/meetings/${session}`, 18000, referer), `https://legislature.vermont.gov/committee/meetings/${session}`));
+    } catch {
+      /* HTML copy is a fallback */
+    }
+    try {
+      add(await fetchVtFloorCalendars(session));
+    } catch {
+      /* floor PDFs only exist on session days */
+    }
+    try {
+      add(await fetchVtWeeklyAgendas(session));
+    } catch {
+      /* weekly standing agendas are empty out of session */
+    }
+    try {
+      add(await fetchVtStandingCommitteeAgendas(session, jsonRows));
+    } catch {
+      /* standing committee pages are extra */
+    }
+    try {
+      add(await enrichVtMeetingAgendas(jsonRows, session));
+    } catch {
+      /* published agendas refine times when present */
+    }
+  }
+  return collapseSameDayTitle([...byId.values()]);
+}
+
 const NM_HAPPENING = "https://www.nmlegis.gov/Calendar/Whats_Happening";
+const NM_SESSION = "https://www.nmlegis.gov/Calendar/Session";
+const NM_WEEKDAY =
+  "Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday";
+
+type NmSessionLink = {
+  href: string;
+  label: string;
+  chamber: "house" | "senate";
+  kind: "floor" | "committees";
+};
+
+function nmPdfStamp(url: string): { chamber: "house" | "senate"; kind: "floor" | "committees"; y: number; m: number; d: number } | null {
+  const m = url.match(/\/([hs])(Sched|Floor)(\d{2})(\d{2})(\d{2})\.pdf/i);
+  if (!m) return null;
+  return {
+    chamber: m[1].toLowerCase() === "s" ? "senate" : "house",
+    kind: /floor/i.test(m[2]) ? "floor" : "committees",
+    m: Number(m[3]),
+    d: Number(m[4]),
+    y: 2000 + Number(m[5]),
+  };
+}
+
+function parseNmSessionLinks(html: string, pageUrl: string): NmSessionLink[] {
+  const blocks: Array<{ id: string; chamber: "house" | "senate"; kind: "floor" | "committees" }> = [
+    { id: "MainContent_dataListHouseCalendarFloor", chamber: "house", kind: "floor" },
+    { id: "MainContent_dataListHouseCalendarCommittees", chamber: "house", kind: "committees" },
+    { id: "MainContent_dataListSenateCalendarFloor", chamber: "senate", kind: "floor" },
+    { id: "MainContent_dataListSenateCalendarCommittees", chamber: "senate", kind: "committees" },
+  ];
+  const out: NmSessionLink[] = [];
+  const seen = new Set<string>();
+  const add = (href: string, label: string, chamber: "house" | "senate", kind: "floor" | "committees") => {
+    const url = absUrl(pageUrl, href).split("#")[0];
+    if (!url || seen.has(url)) return;
+    if (/Entity\/(?:House|Senate)\/(?:Floor|Committee)_Calendar/i.test(url)) return;
+    if (/no (floor calendar|committee schedule) found/i.test(label)) return;
+    seen.add(url);
+    out.push({ href: url, label, chamber, kind });
+  };
+  for (const block of blocks) {
+    const table = html.match(new RegExp(`id="${block.id}"[\\s\\S]*?</table>`, "i"))?.[0] || "";
+    for (const m of table.matchAll(/<a[^>]+href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi)) {
+      add(m[1], cleanOfficialTitle(stripTags(m[2])), block.chamber, block.kind);
+    }
+  }
+  for (const m of html.matchAll(/href="([^"]*Agendas\/(?:Standing|Floor)\/[^"]+\.pdf[^"]*)"/gi)) {
+    const href = m[1];
+    const meta = nmPdfStamp(href);
+    add(href, "", meta?.chamber || (/senate|sSched|sFloor/i.test(href) ? "senate" : "house"), meta?.kind || (/floor/i.test(href) ? "floor" : "committees"));
+  }
+  return out;
+}
+
+function nmSessionTitle(chamber: "house" | "senate", kind: "floor" | "committees"): string {
+  if (kind === "floor") return chamber === "senate" ? "Senate Floor Session" : "House Floor Session";
+  return chamber === "senate" ? "Senate Committee Schedule" : "House Committee Schedule";
+}
+
+function nmEventFromLink(item: NmSessionLink): CalendarEvent | null {
+  const stamp = nmPdfStamp(item.href);
+  const parsed = stamp || parseHumanDate(item.label);
+  if (!parsed) return null;
+  const chamber = stamp?.chamber || item.chamber;
+  const kind = stamp?.kind || item.kind;
+  const start = toIso(parsed.y, parsed.m, parsed.d);
+  const title = item.label && !/\.pdf$/i.test(item.label) ? item.label : nmSessionTitle(chamber, kind);
+  if (junkOfficialTitle(title)) return null;
+  return ev({
+    sourceId: hashId("NM", start, title),
+    state: "NM",
+    title,
+    start,
+    chamber,
+    url: item.href,
+  });
+}
+
+function parseNmCommitteePdf(text: string, pageUrl: string, chamber: "house" | "senate"): CalendarEvent[] {
+  const lines = text
+    .split(/\r?\n/)
+    .map((l) => l.replace(/\s+/g, " ").trim())
+    .filter(Boolean);
+  const dayRe = new RegExp(
+    `^(?:${NM_WEEKDAY}),\\s+([A-Za-z]+\\s+\\d{1,2},\\s+\\d{4})\\s+-\\s+(\\d{1,2}:\\d{2}\\s*[AP]M)\\s+-\\s+(.+)$`,
+    "i",
+  );
+  let committee = "";
+  const byId = new Map<string, CalendarEvent>();
+  for (const line of lines) {
+    const named = line.match(/^(HOUSE|SENATE)\s+(.+?)\s+COMMITTEE\b/i);
+    if (named) {
+      committee = cleanOfficialTitle(`${named[1]} ${named[2]} Committee`);
+      continue;
+    }
+    const when = line.match(dayRe);
+    if (!when || !committee) continue;
+    const parsed = parseHumanDate(when[1]);
+    if (!parsed) continue;
+    const start = toIso(parsed.y, parsed.m, parsed.d, when[2]);
+    const id = hashId("NM", start, committee);
+    if (byId.has(id)) continue;
+    byId.set(
+      id,
+      ev({
+        sourceId: id,
+        state: "NM",
+        title: committee,
+        start,
+        location: when[3].replace(/\s+/g, " ").trim(),
+        chamber,
+        url: pageUrl,
+      }),
+    );
+  }
+  return [...byId.values()].filter(usable);
+}
+
+function parseNmFloorPdf(text: string, pageUrl: string, chamber: "house" | "senate"): CalendarEvent | null {
+  const stamp = nmPdfStamp(pageUrl);
+  const convene = text.match(/convenes?\s+at\s+(\d{1,2}:\d{2}\s*[ap]\.?\s*m\.?)/i)?.[1];
+  const clock = convene ? convene.replace(/\./g, "").replace(/\s+/g, " ").trim() : "";
+  const parsed =
+    stamp ||
+    parseHumanDate(text.match(new RegExp(`(?:${NM_WEEKDAY}),\\s+[A-Za-z]+\\s+\\d{1,2},\\s+\\d{4}`, "i"))?.[0] || "");
+  if (!parsed) return null;
+  const title = nmSessionTitle(chamber, "floor");
+  const start = toIso(parsed.y, parsed.m, parsed.d, clock);
+  return ev({
+    sourceId: hashId("NM", start, title),
+    state: "NM",
+    title,
+    start,
+    chamber,
+    url: pageUrl,
+  });
+}
 
 function parseNm(html: string, pageUrl: string): CalendarEvent[] {
   const byId = new Map<string, CalendarEvent>();
@@ -1807,29 +2346,116 @@ function parseNm(html: string, pageUrl: string): CalendarEvent[] {
       }),
     );
   }
+  if (/dataListHouseCalendarFloor|Upcoming Session Calendar/i.test(html)) {
+    for (const item of parseNmSessionLinks(html, pageUrl)) {
+      const row = nmEventFromLink(item);
+      if (row && !byId.has(row.sourceId)) byId.set(row.sourceId, row);
+    }
+  }
   return [...byId.values()].filter(usable);
 }
 
+async function fetchNmSessionPdfs(html: string): Promise<CalendarEvent[]> {
+  const window = upcomingWindow();
+  const inWindow = (start: string) => {
+    const day = start.slice(0, 10);
+    return day >= window.from && day <= window.to;
+  };
+  const items = parseNmSessionLinks(html, NM_SESSION).filter((item) => /\.pdf($|\?)/i.test(item.href));
+  items.sort((a, b) => {
+    const da = nmPdfStamp(a.href);
+    const db = nmPdfStamp(b.href);
+    const ka = da ? `${da.y}-${String(da.m).padStart(2, "0")}-${String(da.d).padStart(2, "0")}` : "";
+    const kb = db ? `${db.y}-${String(db.m).padStart(2, "0")}-${String(db.d).padStart(2, "0")}` : "";
+    return kb.localeCompare(ka);
+  });
+  const picked = items.slice(0, 16);
+  const parts = await mapPool(picked, 3, async (item) => {
+    const url = item.href;
+    try {
+      if (item.kind === "committees") {
+        const rows = parseNmCommitteePdf(await fetchPdfText(url), url, item.chamber).filter((e) => inWindow(e.start));
+        if (rows.length) return rows;
+      } else {
+        const floor = parseNmFloorPdf(await fetchPdfText(url), url, item.chamber);
+        if (floor && inWindow(floor.start)) return [floor];
+      }
+    } catch {
+      /* dated filename is enough when the PDF cannot be read */
+    }
+    const fallback = nmEventFromLink(item);
+    return fallback && inWindow(fallback.start) ? [fallback] : [];
+  });
+  return parts.flat();
+}
+
 export async function fetchNmMeetings(): Promise<CalendarEvent[]> {
-  return parseNm(await fetchText(NM_HAPPENING), NM_HAPPENING);
+  const happening = parseNm(await fetchText(NM_HAPPENING), NM_HAPPENING);
+  let sessionHtml = "";
+  try {
+    sessionHtml = await fetchText(NM_SESSION);
+  } catch {
+    return happening;
+  }
+  const detailed = await fetchNmSessionPdfs(sessionHtml);
+  const listed = detailed.length ? [] : parseNm(sessionHtml, NM_SESSION);
+  return collapseSameDayTitle([...happening, ...detailed, ...listed]);
 }
 
 const AK_MEETINGS = "https://www.akleg.gov/basis/Meeting/";
+const AK_CATEGORY = /^(standing|special|joint|conference|other|finance sub)(\s+committees?)?$/i;
+
+function mdY(isoDay: string): string {
+  const [y, m, d] = isoDay.split("-").map(Number);
+  return `${m}/${d}/${y}`;
+}
+
+function akCommitteeTitle(chamber: "house" | "senate", rawName: string, kind: string): string {
+  const label = chamber === "senate" ? "Senate" : "House";
+  let name = stripTags(rawName).replace(/\s+/g, " ").replace(/\*+$/, "").trim();
+  const kindText = stripTags(kind).replace(/\s+/g, " ").trim();
+  if (AK_CATEGORY.test(name) && !AK_CATEGORY.test(kindText.split(/\s+/).slice(0, 3).join(" "))) {
+    name = kindText.replace(/\s+(standing|special|joint|conference)?\s*committees?$/i, "").trim();
+  }
+  if (!name || AK_CATEGORY.test(name)) return "";
+  const pretty = cleanOfficialTitle(name);
+  if (!pretty) return "";
+  if (/council|commission|task force|subcommittee/i.test(pretty) || /\bcommittee\b/i.test(pretty)) {
+    return `${label} ${pretty}`;
+  }
+  return `${label} ${pretty} Committee`;
+}
 
 function parseAk(html: string, pageUrl: string): CalendarEvent[] {
   const byId = new Map<string, CalendarEvent>();
-  const re =
-    /\(([HS])\)\s*([A-Z0-9]+)[\s\S]{0,2500}?((?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s+\d{1,2})\s+[A-Za-z]+\s+(\d{1,2}:\d{2}\s*[AP]M)/gi;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(html))) {
-    const chamber = m[1].toUpperCase() === "S" ? "senate" : "house";
-    const title = cleanOfficialTitle(`${chamber === "senate" ? "Senate" : "House"} ${m[2]} Standing Committee`);
-    const parsed = parseHumanDate(m[3]);
-    if (!parsed || !title || junkOfficialTitle(title)) continue;
-    const start = toIso(parsed.y, parsed.m, parsed.d, m[4]);
-    const id = hashId("AK", start, title);
+  const blocks = html.split(/<tr><td colspan="8"><hr>/i);
+  for (const block of blocks) {
+    const head = block.match(
+      /<td[^>]*>\s*\(([HS])\)\s*([^<]+?)\s*<\/td>\s*<td[^>]*>\s*([^<]*)/i,
+    );
+    if (!head) continue;
+    const chamber = head[1].toUpperCase() === "S" ? "senate" : "house";
+    const title = akCommitteeTitle(chamber, head[2], head[3]);
+    if (!title || junkOfficialTitle(title)) continue;
+    const when = block.match(
+      /((?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s+\d{1,2})\s+[A-Za-z]+\s+(\d{1,2}:\d{2}\s*[AP]M)/i,
+    );
+    if (!when) continue;
+    const parsed = parseHumanDate(when[1]);
+    if (!parsed) continue;
+    const start = toIso(parsed.y, parsed.m, parsed.d, when[2]);
+    const code = (block.match(/Committee\/Details\/\?code=([A-Z0-9]+)/i)?.[1] || "").toUpperCase();
+    const loc =
+      block.match(
+        /(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s+\d{1,2}\s+[A-Za-z]+\s+\d{1,2}:\d{2}\s*[AP]M<\/td>\s*<td[^>]*>([^<]*)/i,
+      )?.[1] || "";
+    const id = code ? `AK|${code}|${start}` : hashId("AK", start, title);
     if (byId.has(id)) continue;
-    const loc = html.slice(m.index, m.index + 800).match(/ANCH[^<]{0,40}|CAPITOL[^<]{0,40}|BARNES[^<]{0,40}/i)?.[0] || "";
+    const meeting = code
+      ? `https://www.akleg.gov/basis/Meeting/Detail?Meeting=${encodeURIComponent(
+          `${code} ${start.slice(0, 10)} ${start.slice(11, 16)}:00`,
+        )}`
+      : pageUrl;
     byId.set(
       id,
       ev({
@@ -1839,7 +2465,7 @@ function parseAk(html: string, pageUrl: string): CalendarEvent[] {
         start,
         location: stripTags(loc),
         chamber,
-        url: pageUrl,
+        url: meeting,
       }),
     );
   }
@@ -1847,7 +2473,23 @@ function parseAk(html: string, pageUrl: string): CalendarEvent[] {
 }
 
 export async function fetchAkMeetings(): Promise<CalendarEvent[]> {
-  return parseAk(await fetchText(AK_MEETINGS), AK_MEETINGS);
+  const { from, to } = upcomingWindow();
+  const rangeUrl = `${AK_MEETINGS}Index?mode=results&type=All&com=&startDate=${encodeURIComponent(mdY(from))}&endDate=${encodeURIComponent(mdY(to))}&chamber=`;
+  const byId = new Map<string, CalendarEvent>();
+  for (const [url, headers] of [
+    [rangeUrl, { "X-Requested-With": "XMLHttpRequest", Referer: AK_MEETINGS }],
+    [AK_MEETINGS, undefined],
+  ] as Array<[string, Record<string, string> | undefined]>) {
+    try {
+      const html = await fetchText(url, 18000, headers);
+      for (const row of parseAk(html, AK_MEETINGS)) {
+        if (!byId.has(row.sourceId)) byId.set(row.sourceId, row);
+      }
+    } catch {
+      /* try the next source */
+    }
+  }
+  return [...byId.values()];
 }
 
 function parseMs(html: string, pageUrl: string): CalendarEvent[] {
@@ -1974,16 +2616,18 @@ function parseMsPre(html: string, pageUrl: string): CalendarEvent[] {
 
 export async function fetchMsSchedule(): Promise<CalendarEvent[]> {
   const byId = new Map<string, CalendarEvent>();
+  const errors: string[] = [];
   for (const url of [
     "https://billstatus.ls.state.ms.us/htms/h_sched.htm",
     "https://billstatus.ls.state.ms.us/htms/s_sched.htm",
   ]) {
     try {
-      for (const row of parseMs(await fetchText(url), url)) byId.set(row.sourceId, row);
-    } catch {
-      /* one chamber can fail */
+      for (const row of parseMs(await fetchText(url, 20000), url)) byId.set(row.sourceId, row);
+    } catch (err) {
+      errors.push(`${url}: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
+  if (!byId.size && errors.length) throw new Error(errors.join("; "));
   return [...byId.values()];
 }
 
@@ -2698,6 +3342,7 @@ function parseNjDay(parsed: { y: number; m: number; d: number }, block: string, 
     if (/subject to change|denotes changes|prepared:|vol\.|check internet|office of legislative/i.test(clean)) {
       return;
     }
+    if (/committee group\s*\([a-z]\)|^(senate|assembly)\s+chambers$/i.test(clean)) return;
     events.push(
       ev({
         sourceId: hashId("NJ", toIso(parsed.y, parsed.m, parsed.d, time), clean),
@@ -2839,8 +3484,10 @@ function parseTx(html: string, pageUrl: string): CalendarEvent[] {
       /\d{1,2}:\d{2}\s*[ap]m/i,
     )?.[0];
     const nameHtml = chunk.match(/data-label="Meeting Date \/ Committee Name">([\s\S]*?)<\/td>/i)?.[1] || "";
-    const title = stripTags(nameHtml.split(/Type:/i)[0] || "").replace(/\s+/g, " ").trim();
-    if (!title) continue;
+    const rawTitle = stripTags(nameHtml.split(/Type:/i)[0] || "").replace(/\s+/g, " ").trim();
+    if (!rawTitle) continue;
+    const chamber = /Chamber=S/i.test(pageUrl) ? "senate" : /Chamber=H/i.test(pageUrl) ? "house" : chamberFromTitle(rawTitle);
+    const title = withChamberLabel(rawTitle, chamber === "senate" ? "Senate" : chamber === "house" ? "House" : "");
     const href = chunk.match(/href="([^"]*schedules\/html[^"]*)"/i)?.[1];
     events.push(
       ev({
@@ -2848,6 +3495,7 @@ function parseTx(html: string, pageUrl: string): CalendarEvent[] {
         state: "TX",
         title,
         start: toIso(parsed.y, parsed.m, parsed.d, time),
+        chamber,
         url: href ? absUrl(pageUrl, href) : pageUrl,
       }),
     );
@@ -2898,31 +3546,67 @@ function parseIl(html: string, pageUrl: string): CalendarEvent[] {
 function parsePa(html: string, pageUrl: string): CalendarEvent[] {
   const events: CalendarEvent[] = [];
   const chamber = /\/senate\//i.test(pageUrl) ? "senate" : "house";
-  const groups = html.split(/data-date="/i);
-  for (const group of groups.slice(1)) {
-    const dateAttr = (group.match(/^([^"]+)/) || [])[1] || "";
-    const parsed = parseHumanDate(dateAttr);
+  const blocks = html.split(/meeting-featured-info-alt/i).slice(1);
+  for (const block of blocks) {
+    const title = cleanOfficialTitle(stripTags(block.match(/class="[^"]*h5[^"]*"[^>]*>([\s\S]*?)<\/div>/i)?.[1] || ""));
+    if (!title || junkOfficialTitle(title)) continue;
+    const gcal = block.match(/dates=(\d{8})T(\d{6})/i);
+    const time = stripTags(block).match(/\d{1,2}:\d{2}\s*[ap]m/i)?.[0];
+    const heading = stripTags(block.match(/<(?:h2|h3|h4)[^>]*>([\s\S]*?)<\/(?:h2|h3|h4)>/i)?.[1] || "");
+    const parsed = gcal
+      ? { y: Number(gcal[1].slice(0, 4)), m: Number(gcal[1].slice(4, 6)), d: Number(gcal[1].slice(6, 8)) }
+      : parseHumanDate(heading) || parseHumanDate(stripTags(block.slice(0, 400)));
     if (!parsed) continue;
-    const blockRe = /class="[^"]*meeting-featured-info-alt[\s\S]*?class="[^"]*h5[^"]*"[^>]*>([\s\S]*?)<\/div>/gi;
-    let m: RegExpExecArray | null;
-    while ((m = blockRe.exec(group))) {
-      const title = stripTags(m[1]);
-      if (!title) continue;
-      const around = group.slice(m.index, m.index + 800);
-      const time = stripTags(around).match(/\d{1,2}:\d{2}\s*[ap]m/i)?.[0];
-      events.push(
-        ev({
-          sourceId: hashId("PA", toIso(parsed.y, parsed.m, parsed.d, time), title),
-          state: "PA",
-          title,
-          start: toIso(parsed.y, parsed.m, parsed.d, time),
-          chamber,
-          url: pageUrl,
-        }),
-      );
+    const start = toIso(parsed.y, parsed.m, parsed.d, time);
+    const loc = stripTags(block.match(/fa-location-pin[\s\S]{0,200}?<\/i>\s*([\s\S]*?)<\/div>/i)?.[1] || "");
+    const href = block.match(/webcalendar\?meetingid=(\d+)/i)?.[1];
+    events.push(
+      ev({
+        sourceId: href ? `pa-${chamber}-${href}` : hashId("PA", start, title),
+        state: "PA",
+        title,
+        start,
+        location: loc.replace(/\s+/g, " ").trim(),
+        chamber,
+        url: href ? `https://www.palegis.us/${chamber}/committees/webcalendar?meetingid=${href}` : pageUrl,
+      }),
+    );
+  }
+  return events.filter(usable);
+}
+
+async function fetchPaMeetings(): Promise<CalendarEvent[]> {
+  const byId = new Map<string, CalendarEvent>();
+  const errors: string[] = [];
+  for (const [url, chamber] of [
+    ["https://www.palegis.us/house/committees/webcalendar", "house"],
+    ["https://www.palegis.us/senate/committees/webcalendar", "senate"],
+  ] as const) {
+    try {
+      const rows = parseIcsText(await fetchText(url, 20000)).filter((e) => e.title && e.start);
+      for (const row of rows) {
+        const id = `pa-${chamber}-${row.sourceId}`.slice(0, 180);
+        if (byId.has(id)) continue;
+        byId.set(
+          id,
+          ev({
+            sourceId: id,
+            state: "PA",
+            title: row.title,
+            start: row.start,
+            location: row.location || "",
+            chamber,
+            url: row.url || `https://www.palegis.us/${chamber}/committees/meeting-schedule`,
+            description: row.description || "",
+          }),
+        );
+      }
+    } catch (err) {
+      errors.push(`${chamber}: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
-  return events;
+  if (!byId.size && errors.length) throw new Error(errors.join("; "));
+  return [...byId.values()].filter(usable);
 }
 
 function parseGenericLabeledRows(html: string, pageUrl: string, state: string): CalendarEvent[] {
@@ -3220,7 +3904,15 @@ async function fetchKsSpecialPages(): Promise<CalendarEvent[]> {
   return pages.flat().filter(usable);
 }
 
-const MI_RSS = "https://legislature.mi.gov/documents/publications/RssFeeds/comschedule.xml";
+const MI_RSS = [
+  "https://www.legislature.mi.gov/documents/publications/RssFeeds/comschedule.xml",
+  "https://legislature.mi.gov/documents/publications/RssFeeds/comschedule.xml",
+];
+const MI_PAGES = [
+  "https://www.legislature.mi.gov/Committees/Meetings?sortBy=CalendarTime",
+  "https://www.legislature.mi.gov/Committees/Meetings?sortBy=Date",
+  "https://legislature.mi.gov/Committees/Meetings",
+];
 
 function parseMiRssTitle(title: string): { chamber: string; name: string; date: string; time: string } | null {
   const m = title.match(
@@ -3230,18 +3922,19 @@ function parseMiRssTitle(title: string): { chamber: string; name: string; date: 
   return { chamber: m[1].toLowerCase() === "senate" ? "senate" : "house", name: m[2].trim(), date: m[3], time: m[4] || "" };
 }
 
-export async function fetchMiMeetings(): Promise<CalendarEvent[]> {
-  const xml = await fetchText(MI_RSS);
+function parseMiRss(xml: string): CalendarEvent[] {
   const byId = new Map<string, CalendarEvent>();
   for (const item of xml.split(/<item[\s>]/i).slice(1)) {
     const rawTitle = stripTags(tag(item, "title"));
-    const link = stripTags(tag(item, "link")) || "https://legislature.mi.gov/Committees/Meetings";
+    const link = stripTags(tag(item, "link")) || "https://www.legislature.mi.gov/Committees/Meetings";
     const desc = stripTags(tag(item, "description"));
     if (/cancelled/i.test(desc) || /cancelled/i.test(rawTitle)) continue;
     const parsedTitle = parseMiRssTitle(rawTitle);
     const parsed = parsedTitle ? parseHumanDate(parsedTitle.date) : parseHumanDate(`${rawTitle} ${desc}`);
-    const title = cleanOfficialTitle(parsedTitle?.name || rawTitle.replace(/^House Meeting -\s*/i, "").replace(/^Senate Meeting -\s*/i, ""));
-    if (!title || !parsed || junkOfficialTitle(title)) continue;
+    const title = cleanOfficialTitle(
+      parsedTitle?.name || rawTitle.replace(/^House Meeting -\s*/i, "").replace(/^Senate Meeting -\s*/i, ""),
+    );
+    if (!title || !parsed || junkOfficialTitle(title) || /funds*(rep\.|sen\.)/i.test(title)) continue;
     const start = toIso(parsed.y, parsed.m, parsed.d, parsedTitle?.time);
     const guid = stripTags(tag(item, "guid")) || hashId("MI", start, title);
     const id = `mi-${guid}`;
@@ -3260,47 +3953,92 @@ export async function fetchMiMeetings(): Promise<CalendarEvent[]> {
       }),
     );
   }
-  try {
-    const page = await fetchText("https://legislature.mi.gov/Committees/Meetings", 20000);
-    const sessionRe = /(House|Senate)\s+adjourned until\s+([^<\n]+)/gi;
-    let m: RegExpExecArray | null;
-    while ((m = sessionRe.exec(page))) {
-      const parsed = parseHumanDate(m[2]);
-      if (!parsed) continue;
-      const time = m[2].match(/\d{1,2}:\d{2}\s*[ap]m/i)?.[0];
-      const chamber = m[1].toLowerCase() === "senate" ? "senate" : "house";
-      const title = `${m[1]} Session`;
-      const start = toIso(parsed.y, parsed.m, parsed.d, time);
-      const id = hashId("MI", start, title);
-      if (byId.has(id)) continue;
-      byId.set(
-        id,
-        ev({
-          sourceId: id,
-          state: "MI",
-          title,
-          start,
-          chamber,
-          url: "https://legislature.mi.gov/Committees/Meetings",
-        }),
-      );
-    }
-  } catch {
-    /* banner dates are extra */
+  return [...byId.values()];
+}
+
+function parseMiMeetingsPage(html: string, pageUrl: string): CalendarEvent[] {
+  const byId = new Map<string, CalendarEvent>();
+  const sessionRe = /(House|Senate)\s+adjourned until\s+([^<\n]+)/gi;
+  let banner: RegExpExecArray | null;
+  while ((banner = sessionRe.exec(html))) {
+    const parsed = parseHumanDate(banner[2]);
+    if (!parsed) continue;
+    const time = banner[2].match(/\d{1,2}:\d{2}\s*[ap]m/i)?.[0];
+    const chamber = banner[1].toLowerCase() === "senate" ? "senate" : "house";
+    const title = `${banner[1]} Session`;
+    const start = toIso(parsed.y, parsed.m, parsed.d, time);
+    const id = hashId("MI", start, title);
+    if (byId.has(id)) continue;
+    byId.set(
+      id,
+      ev({
+        sourceId: id,
+        state: "MI",
+        title,
+        start,
+        chamber,
+        url: pageUrl,
+      }),
+    );
+  }
+  const cellRe =
+    /meetingID=(\d+)[\s\S]{0,500}?(?:>([HS])<|(?:>(House|Senate)\b))?[\s\S]{0,300}?<a[^>]+meetingID=\1[^>]*>([\s\S]*?)<\/a>[\s\S]{0,200}?(\d{1,2}:\d{2}\s*[AP]M)[\s\S]{0,120}?(cancelled)?/gi;
+  let m: RegExpExecArray | null;
+  while ((m = cellRe.exec(html))) {
+    if (m[6]) continue;
+    const title = cleanOfficialTitle(stripTags(m[4]));
+    if (!title || junkOfficialTitle(title) || /funds*(rep\.|sen\.)/i.test(title)) continue;
+    const around = html.slice(Math.max(0, m.index - 400), m.index + 200);
+    const parsed = parseHumanDate(around) || parseHumanDate(stripTags(around));
+    if (!parsed) continue;
+    const chamberRaw = (m[2] || m[3] || "").toLowerCase();
+    const chamber = chamberRaw.startsWith("s") ? "senate" : chamberRaw.startsWith("h") ? "house" : "";
+    const start = toIso(parsed.y, parsed.m, parsed.d, m[5]);
+    const id = `mi-${m[1]}`;
+    if (byId.has(id)) continue;
+    byId.set(
+      id,
+      ev({
+        sourceId: id,
+        state: "MI",
+        title,
+        start,
+        chamber,
+        url: `https://www.legislature.mi.gov/Committees/Meeting?meetingID=${m[1]}`,
+      }),
+    );
   }
   return [...byId.values()].filter(usable);
 }
 
-const RI_CAL = "https://www.rilegislature.gov/CalendarEvent/CalendarEvent.aspx";
+export async function fetchMiMeetings(): Promise<CalendarEvent[]> {
+  const byId = new Map<string, CalendarEvent>();
+  const add = (rows: CalendarEvent[]) => {
+    for (const e of rows) if (!byId.has(e.sourceId)) byId.set(e.sourceId, e);
+  };
+  const errors: string[] = [];
+  for (const url of MI_RSS) {
+    try {
+      add(parseMiRss(await fetchText(url, 18000)));
+      break;
+    } catch (err) {
+      errors.push(`rss ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+  for (const url of MI_PAGES) {
+    try {
+      add(parseMiMeetingsPage(await fetchText(url, 20000), url));
+      if (byId.size) break;
+    } catch (err) {
+      errors.push(`page ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+  if (!byId.size && errors.length) throw new Error(errors.join("; "));
+  return [...byId.values()].filter(usable);
+}
+
+const RI_HOME = "https://www.rilegislature.gov/Pages/Default.aspx";
 const RI_STATUS = "https://status.rilegislature.gov/legislative_committee_calendar.aspx";
-
-function riMdY(d: Date): string {
-  return `${d.getMonth() + 1}/${d.getDate()}/${d.getFullYear()}`;
-}
-
-function riDayStamp(d: Date): string {
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-}
 
 function riChamber(title: string): string {
   const t = title.toLowerCase();
@@ -3310,24 +4048,127 @@ function riChamber(title: string): string {
   return "";
 }
 
+function riHiddenInputs(html: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const tag of html.match(/<input\b[^>]*>/gi) || []) {
+    if (!/type\s*=\s*["']hidden["']/i.test(tag)) continue;
+    const name = tag.match(/\bname\s*=\s*["']([^"']+)["']/i)?.[1];
+    if (!name) continue;
+    out[name] = decodeEntities(tag.match(/\bvalue\s*=\s*["']([^"']*)["']/i)?.[1] || "");
+  }
+  return out;
+}
+
+function parseRiDotUrls(html: string, pageUrl: string): string[] {
+  const urls: string[] = [];
+  const seen = new Set<string>();
+  const re = /href\s*=\s*['"]([^'"]*CalendarEvent\/CalendarEvent\.aspx\?[^'"]*date=\d{1,2}\/\d{1,2}\/\d{4}[^'"]*)['"]/gi;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(html))) {
+    const url = absUrl(pageUrl, decodeEntities(m[1]));
+    if (seen.has(url)) continue;
+    seen.add(url);
+    urls.push(url);
+  }
+  return urls;
+}
+
+function riCalendarNext(html: string): { target: string; arg: string } | null {
+  const m = html.match(/__doPostBack\('([^']*Calendar1)','(V\d+)'\)[\s\S]{0,180}?next month/i);
+  if (!m) return null;
+  return { target: m[1], arg: m[2] };
+}
+
+function riAgendaKey(url: string): string {
+  try {
+    const path = decodeURIComponent(new URL(url).pathname).toLowerCase();
+    const file = path.split("/").filter(Boolean).pop() || "";
+    return /\.(pdf|html?)$/i.test(file) ? file.replace(/\.(pdf|html?)$/i, "").replace(/[^a-z0-9]+/g, " ").trim() : "";
+  } catch {
+    return "";
+  }
+}
+
+function riNormTitle(title: string): string {
+  return title.toLowerCase().replace(/[^a-z0-9]+/g, " ").replace(/\s+/g, " ").trim();
+}
+
+function riTitleTokens(title: string): Set<string> {
+  const stop = new Set([
+    "the", "a", "an", "of", "and", "or", "to", "in", "on", "for", "at", "by", "with", "from",
+    "agenda", "hearing", "meeting", "special", "legislative", "commission", "committee",
+    "house", "senate", "joint", "state",
+  ]);
+  return new Set(
+    riNormTitle(title)
+      .split(" ")
+      .filter((w) => w.length > 2 && !stop.has(w)),
+  );
+}
+
+function riTitlesMatch(a: string, b: string): boolean {
+  const na = riNormTitle(a);
+  const nb = riNormTitle(b);
+  if (!na || !nb) return false;
+  if (na === nb) return true;
+  if ((na.length >= 24 || nb.length >= 24) && (na.includes(nb) || nb.includes(na))) return true;
+  const ta = riTitleTokens(a);
+  const tb = riTitleTokens(b);
+  if (!ta.size || !tb.size) return false;
+  let inter = 0;
+  for (const tok of ta) if (tb.has(tok)) inter += 1;
+  return inter >= 3 && inter / (ta.size + tb.size - inter) >= 0.62;
+}
+
+function riSameMeeting(a: CalendarEvent, b: CalendarEvent): boolean {
+  if (a.start.slice(0, 10) !== b.start.slice(0, 10)) return false;
+  const agendaA = riAgendaKey(a.url || "");
+  const agendaB = riAgendaKey(b.url || "");
+  if (agendaA && agendaB && agendaA === agendaB) return true;
+  if (!riTitlesMatch(a.title, b.title)) return false;
+  const timeA = a.start.slice(11, 16);
+  const timeB = b.start.slice(11, 16);
+  return timeA === timeB || timeA === "00:00" || timeB === "00:00";
+}
+
+function collapseRiDuplicates(rows: CalendarEvent[]): CalendarEvent[] {
+  const kept: CalendarEvent[] = [];
+  for (const row of rows) {
+    const idx = kept.findIndex((prev) => riSameMeeting(prev, row));
+    if (idx < 0) kept.push(row);
+    else kept[idx] = mergeOfficialEvent(kept[idx], row);
+  }
+  return kept;
+}
+
 function parseRi(html: string, pageUrl: string): CalendarEvent[] {
   const byId = new Map<string, CalendarEvent>();
+  const table = html.match(/id="[^"]*eventGridView"[\s\S]*?<\/table>/i)?.[0] || "";
+  const source = table || html;
   const rowRe = /<tr[^>]*>([\s\S]*?)<\/tr>/gi;
   let row: RegExpExecArray | null;
-  while ((row = rowRe.exec(html))) {
+  while ((row = rowRe.exec(source))) {
+    if (/<th\b/i.test(row[1]) && !/<td\b/i.test(row[1])) continue;
     const cells = [...row[1].matchAll(/<td[^>]*>([\s\S]*?)<\/td>/gi)].map((c) => stripTags(c[1]));
     if (cells.length < 3) continue;
-    const dateCell = cells.find((c) => parseHumanDate(c));
-    const parsed = dateCell ? parseHumanDate(dateCell) : parseHumanDate(cells.join(" "));
-    const titleCell =
-      cells.find((c) => /house|senate|joint|commission|committee/i.test(c) && !parseHumanDate(c) && !/^(pdf|html)$/i.test(c)) ||
-      "";
-    const title = cleanOfficialTitle(titleCell);
-    if (!parsed || !title || junkOfficialTitle(title)) continue;
-    const timeCell = cells.find((c) => /\d{1,2}:\d{2}\s*[ap]m/i.test(c) || /rise of the/i.test(c)) || "";
+    const parsed = parseHumanDate(cells.find((c) => parseHumanDate(c)) || "") || parseHumanDate(cells[0] || "");
+    const timeCell = cells.find((c) => /\d{1,2}:\d{2}\s*[ap]m/i.test(c) || /rise of the/i.test(c)) || cells[1] || "";
     const time = timeCell.match(/\d{1,2}:\d{2}\s*[ap]m/i)?.[0];
-    const loc = cells.find((c) => /room|chamber|lounge|state house/i.test(c)) || "";
-    const href = row[1].match(/href="([^"]+agenda[^"]+)"/i)?.[1] || pageUrl;
+    const title = cleanOfficialTitle(
+      table
+        ? cells[2] || ""
+        : cells.find((c) => {
+            if (!c || parseHumanDate(c) || /^(pdf|html)$/i.test(c) || /^\d{1,2}:\d{2}\s*[ap]m$/i.test(c)) return false;
+            if (/^(room\b|.*state house$)/i.test(c) && c.length < 48) return false;
+            return c.length >= 8;
+          }) || "",
+    );
+    if (!parsed || !title || junkOfficialTitle(title)) continue;
+    const loc = cells.find((c) => /room|chamber|lounge|state house/i.test(c) && c !== title && !parseHumanDate(c)) || "";
+    const href =
+      row[1].match(/href="([^"]+\.pdf[^"]*)"/i)?.[1] ||
+      row[1].match(/href="([^"]+\.html?[^"]*)"/i)?.[1] ||
+      pageUrl;
     const start = toIso(parsed.y, parsed.m, parsed.d, time);
     const id = hashId("RI", start, title);
     if (byId.has(id)) continue;
@@ -3348,74 +4189,62 @@ function parseRi(html: string, pageUrl: string): CalendarEvent[] {
   return [...byId.values()].filter(usable);
 }
 
-function riWeekdaysAround(center: Date): Date[] {
-  const dates: Date[] = [];
-  const start = new Date(center);
-  start.setDate(center.getDate() - ((center.getDay() + 6) % 7));
-  for (let i = 0; i < 5; i += 1) {
-    const d = new Date(start);
-    d.setDate(start.getDate() + i);
-    dates.push(d);
+async function fetchRiHomeCalendar(): Promise<CalendarEvent[]> {
+  let html = "";
+  try {
+    html = await fetchText(RI_HOME, 20000);
+  } catch {
+    return [];
   }
-  return dates;
+  const dayUrls = new Set<string>(parseRiDotUrls(html, RI_HOME));
+  for (let i = 0; i < 3; i++) {
+    const next = riCalendarNext(html);
+    if (!next) break;
+    const fields = riHiddenInputs(html);
+    fields.__EVENTTARGET = next.target;
+    fields.__EVENTARGUMENT = next.arg;
+    const body = Object.entries(fields)
+      .map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(value)}`)
+      .join("&");
+    try {
+      html = await fetchTextPost(RI_HOME, body, 20000, { Referer: RI_HOME, "X-Requested-With": "" });
+    } catch {
+      break;
+    }
+    if (!/myCalendarDay/i.test(html)) break;
+    for (const url of parseRiDotUrls(html, RI_HOME)) dayUrls.add(url);
+  }
+  if (!dayUrls.size) return [];
+  const pages = await mapPool([...dayUrls], 4, async (url) => {
+    try {
+      return parseRi(await fetchText(url, 12000, { Referer: RI_HOME }), url);
+    } catch {
+      return [] as CalendarEvent[];
+    }
+  });
+  return pages.flat();
 }
 
 export async function fetchRiCalendar(): Promise<CalendarEvent[]> {
   const byId = new Map<string, CalendarEvent>();
   const add = (rows: CalendarEvent[]) => {
     for (const e of rows) {
-      if (!byId.has(e.sourceId)) byId.set(e.sourceId, e);
+      if (e.sourceId && !byId.has(e.sourceId)) byId.set(e.sourceId, e);
     }
   };
 
   try {
+    add(await fetchRiHomeCalendar());
+  } catch {
+    /* homepage calendar dots are the session/interim schedule */
+  }
+  try {
     add(parseRi(await fetchText(RI_STATUS, 12000), RI_STATUS));
   } catch {
-    /* off-session page is often empty */
+    /* off-session committee calendar is often empty */
   }
 
-  const probe = new Map<string, Date>();
-  const today = new Date();
-  today.setHours(12, 0, 0, 0);
-  for (let weeks = -24; weeks <= 3; weeks += 1) {
-    const d = new Date(today);
-    d.setDate(today.getDate() + weeks * 7);
-    d.setDate(d.getDate() - d.getDay() + 3);
-    probe.set(riDayStamp(d), d);
-  }
-  probe.set(riDayStamp(today), today);
-
-  const wedHits = await mapPool([...probe.values()], 5, async (day) => {
-    const url = `${RI_CAL}?date=${encodeURIComponent(riMdY(day))}&id=1`;
-    try {
-      const rows = parseRi(await fetchText(url, 10000), url);
-      return { day, rows };
-    } catch {
-      return { day, rows: [] as CalendarEvent[] };
-    }
-  });
-
-  const extra = new Map<string, Date>();
-  for (const hit of wedHits) {
-    add(hit.rows);
-    if (!hit.rows.length) continue;
-    for (const d of riWeekdaysAround(hit.day)) {
-      const key = riDayStamp(d);
-      if (!probe.has(key)) extra.set(key, d);
-    }
-  }
-
-  const fill = await mapPool([...extra.values()], 5, async (day) => {
-    const url = `${RI_CAL}?date=${encodeURIComponent(riMdY(day))}&id=1`;
-    try {
-      return parseRi(await fetchText(url, 10000), url);
-    } catch {
-      return [] as CalendarEvent[];
-    }
-  });
-  for (const rows of fill) add(rows);
-
-  return [...byId.values()].filter(usable);
+  return collapseRiDuplicates([...byId.values()].filter(usable));
 }
 
 const WV_INTERIMS = "https://www.wvlegislature.gov/Committees/Interims/interims.cfm";
@@ -3595,17 +4424,46 @@ function parseCt(html: string, pageUrl: string): CalendarEvent[] {
   return [...byId.values()].filter(usable);
 }
 
+function ctStamp(d: Date): string {
+  return `${String(d.getMonth() + 1).padStart(2, "0")}/${String(d.getDate()).padStart(2, "0")}/${d.getFullYear()}`;
+}
+
 async function fetchCtEvents(): Promise<CalendarEvent[]> {
-  const from = new Date();
-  from.setMonth(from.getMonth() - 1);
-  const to = new Date();
-  to.setMonth(to.getMonth() + 4);
-  const body = `sDate=${from.getMonth() + 1}/${from.getDate()}/${from.getFullYear()}&eDate=${to.getMonth() + 1}/${to.getDate()}/${to.getFullYear()}`;
-  const url = "https://www.cga.ct.gov/webapps/in-events1x.asp";
-  const html = await fetchTextPost(url, body, 22000, {
-    Referer: "https://www.cga.ct.gov/webapps/cgaevents.asp",
+  const pageUrl = "https://www.cga.ct.gov/webapps/cgaevents.asp";
+  const postUrl = "https://www.cga.ct.gov/webapps/in-events1x.asp";
+  const byId = new Map<string, CalendarEvent>();
+  const add = (rows: CalendarEvent[]) => {
+    for (const e of rows) if (!byId.has(e.sourceId)) byId.set(e.sourceId, e);
+  };
+  const errors: string[] = [];
+  try {
+    add(parseCt(await fetchText(pageUrl, 18000), pageUrl));
+  } catch (err) {
+    errors.push(`page ${err instanceof Error ? err.message : String(err)}`);
+  }
+  const start = new Date();
+  start.setDate(start.getDate() - 2);
+  const windows = Array.from({ length: 8 }, (_, i) => {
+    const from = new Date(start);
+    from.setDate(start.getDate() + i * 7);
+    const to = new Date(from);
+    to.setDate(from.getDate() + 6);
+    return { from, to };
   });
-  return parseCt(html, "https://www.cga.ct.gov/webapps/cgaevents.asp");
+  const windowRows = await mapPool(windows, 4, async ({ from, to }) => {
+    try {
+      return parseCt(
+        await fetchTextPost(postUrl, `sDate=${ctStamp(from)}&eDate=${ctStamp(to)}`, 16000, { Referer: pageUrl }),
+        pageUrl,
+      );
+    } catch (err) {
+      errors.push(`window ${ctStamp(from)} ${err instanceof Error ? err.message : String(err)}`);
+      return [] as CalendarEvent[];
+    }
+  });
+  for (const rows of windowRows) add(rows);
+  if (!byId.size && errors.length) throw new Error(errors.join("; "));
+  return [...byId.values()].filter(usable);
 }
 
 function parseMeWeek(html: string, pageUrl: string): CalendarEvent[] {
@@ -4176,6 +5034,69 @@ export async function fetchWyMeetings(): Promise<CalendarEvent[]> {
   return [...byId.values()].filter(usable);
 }
 
+async function fetchWiCommitteeSchedule(): Promise<CalendarEvent[]> {
+  const window = upcomingWindow();
+  const html = await fetchText(
+    `https://committeeschedule.legis.wisconsin.gov/?StartDate=${window.from}&CommitteeID=-1&CommItemVisibleName=-1&TopicID=-1&ViewType=listDay&ReloadCache=True`,
+    40000,
+  );
+  return parseWiCommitteeSchedule(html, window);
+}
+
+function formatWiTitle(raw: string): string {
+  const m = raw.match(/^(.*?)\s*\((Senate|Assembly|Joint|Legislative Council)\)\s*$/i);
+  if (!m) return raw;
+  const name = m[1].trim();
+  const kind = m[2];
+  if (/legislative council/i.test(kind)) return `${name} (Legislative Council)`;
+  if (/joint/i.test(kind)) return `Joint Committee on ${name}`;
+  if (/assembly/i.test(kind)) return `Assembly Committee on ${name}`;
+  return `Senate Committee on ${name}`;
+}
+
+function wiChamber(classNames: string, title: string): string {
+  const blob = `${classNames} ${title}`;
+  if (/joint|legislativecouncil|legislative council/i.test(blob)) return "joint";
+  if (/\bsenate\b/i.test(blob)) return "senate";
+  if (/\bassembly\b/i.test(blob)) return "house";
+  return "joint";
+}
+
+function parseWiCommitteeSchedule(html: string, window: { from: string; to: string }): CalendarEvent[] {
+  const events: CalendarEvent[] = [];
+  const seen = new Set<string>();
+  const re =
+    /title:\s*"((?:\\.|[^"\\])*)"\s*,\s*start:\s*'([^']+)'\s*,\s*description:\s*'((?:\\.|[^'\\])*)'\s*,\s*classNames:\s*'([^']*)'\s*,\s*url:\s*'([^']*)'/gi;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(html))) {
+    const rawTitle = decodeEntities(m[1].replace(/\\"/g, '"')).replace(/\s+/g, " ").trim();
+    const start = m[2];
+    const description = decodeEntities(m[3]).replace(/\s+/g, " ").trim();
+    const classNames = m[4];
+    const url = m[5];
+    const day = start.slice(0, 10);
+    if (!rawTitle || !day || day < window.from || day > window.to) continue;
+    if (/cancel/i.test(description)) continue;
+    const title = formatWiTitle(rawTitle);
+    const cid = (url.match(/\/cid\/(\d+)/i) || [])[1] || "";
+    const sourceId = cid ? `WI|${cid}|${start}` : hashId("WI", start, title);
+    if (seen.has(sourceId)) continue;
+    seen.add(sourceId);
+    events.push(
+      ev({
+        sourceId,
+        state: "WI",
+        title,
+        start,
+        chamber: wiChamber(classNames, title),
+        url,
+        description,
+      }),
+    );
+  }
+  return events.filter(usable);
+}
+
 export async function fetchRssEvents(url: string, state: string): Promise<CalendarEvent[]> {
   const xml = await fetchText(url);
   const events: CalendarEvent[] = [];
@@ -4211,56 +5132,6 @@ export async function fetchRssEvents(url: string, state: string): Promise<Calend
 async function fetchVaMeetings(): Promise<CalendarEvent[]> {
   const byId = new Map<string, CalendarEvent>();
   const window = upcomingWindow();
-  const addDated = (html: string, pageUrl: string, fallbackTitle: string, chamber = "joint") => {
-    const dates = [
-      ...(html.match(
-        /\b(?:January|February|March|April|May|June|July|August|September|October|November|December|Sept)\.?\s+\d{1,2},?\s+2026\b/gi,
-      ) || []),
-      ...(html.match(/\b\d{1,2}\/\d{1,2}\/2026\b/g) || []),
-    ];
-    for (const raw of [...new Set(dates)].slice(0, 12)) {
-      const parsed = parseHumanDate(raw);
-      if (!parsed) continue;
-      const start = toIso(parsed.y, parsed.m, parsed.d);
-      const day = start.slice(0, 10);
-      if (day < window.from || day > window.to) continue;
-      const at = html.toLowerCase().indexOf(raw.toLowerCase());
-      const nearby = at >= 0 ? html.slice(Math.max(0, at - 180), at + 180) : "";
-      const heading = cleanOfficialTitle(
-        stripTags((nearby.match(/<(?:h[1-4]|strong|b|a)[^>]*>([\s\S]*?)<\/(?:h[1-4]|strong|b|a)>/i) || [])[1] || ""),
-      );
-      const title = heading && !junkOfficialTitle(heading) && !/^\d{1,2}\/\d{1,2}\/\d{2,4}/.test(heading) ? heading : fallbackTitle;
-      if (!title || junkOfficialTitle(title) || /^\d{1,2}\/\d{1,2}\/\d{2,4}/.test(title)) continue;
-      const id = hashId("VA", start, title);
-      if (byId.has(id)) continue;
-      byId.set(
-        id,
-        ev({
-          sourceId: id,
-          state: "VA",
-          title,
-          start,
-          chamber,
-          url: pageUrl,
-        }),
-      );
-    }
-  };
-
-  const pages = [
-    ["https://foiacouncil.dls.virginia.gov/meetings.htm", "Virginia Freedom of Information Advisory Council"],
-    ["https://dls.virginia.gov/commissions.html", "DLS commission"],
-    ["https://jlarc.virginia.gov/", "Joint Legislative Audit and Review Commission"],
-    ["https://jlarc.virginia.gov/meetings.asp", "Joint Legislative Audit and Review Commission"],
-  ] as const;
-  for (const [url, title] of pages) {
-    try {
-      addDated(await fetchText(url, 25000), url, title);
-    } catch {
-      /* commission page can 404 */
-    }
-  }
-
   try {
     const from = window.from;
     const to = window.to;
@@ -4275,7 +5146,16 @@ async function fetchVaMeetings(): Promise<CalendarEvent[]> {
         : Array.isArray(data.data)
           ? data.data
           : [];
-    for (const row of rows as { title?: string; start?: string; location?: string; ownerName?: string; isCancelled?: boolean; StartDate?: string; OwnerName?: string; Title?: string }[]) {
+    for (const row of rows as {
+      title?: string;
+      start?: string;
+      location?: string;
+      ownerName?: string;
+      isCancelled?: boolean;
+      StartDate?: string;
+      OwnerName?: string;
+      Title?: string;
+    }[]) {
       if (row.isCancelled) continue;
       const title = String(row.title || row.Title || row.ownerName || row.OwnerName || "").trim();
       const start = String(row.start || row.StartDate || "");

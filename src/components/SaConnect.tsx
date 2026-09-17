@@ -37,7 +37,7 @@ type Session = {
 export function SaConnect() {
   const [session, setSession] = useState<Session | null>(null);
   const [cookie, setCookie] = useState("");
-  const [promptDaily, setPromptDaily] = useState(true);
+  const [promptDaily, setPromptDaily] = useState(false);
   const [busy, setBusy] = useState("");
   const [message, setMessage] = useState("");
   const [waiting, setWaiting] = useState(false);
@@ -260,12 +260,41 @@ export function SaConnect() {
       </div>
 
       <div className="rounded-xl border border-border bg-teal-soft/40 px-4 py-3 text-sm">
-        <p className="font-medium">{session?.hosted ? "Connect SA on this hosted site" : "Repeatable login"}</p>
-        <p className="mt-2 text-muted">
-          {session?.hosted
-            ? "This Vercel server cannot open a Playwright window. Sign in at admin.stateaffairs.com/meetings, then paste the Cookie header below. The session is stored in Neon for the whole team."
-            : "This opens an Edge or Chrome window on this computer, the same way the hearings scraper does. Sign in with JumpCloud once. The app saves that session under data/sa-auth.json and reuses it until Cloudflare Access expires. You can also run npm run sa:login from a terminal."}
+        <p className="font-medium">
+          {session?.hosted ? "Stay connected without pasting cookies" : "Repeatable login"}
         </p>
+        {session?.hosted ? (
+          <div className="mt-2 space-y-2 text-muted">
+            <p>
+              This hosted site cannot open JumpCloud. Cookie paste also dies after about an hour.
+              Keep SA connected from this PC instead:
+            </p>
+            <ol className="list-decimal space-y-1 pl-5">
+              <li>
+                In this repo, put the same <code>ADMIN_PASSWORD</code> you use for Settings into{" "}
+                <code>.env.local</code>.
+              </li>
+              <li>
+                Run <code>npm run sa:login</code> and finish JumpCloud / Cloudflare in the window
+                that opens.
+              </li>
+              <li>
+                Run <code>npm run sa:keep:install</code>. This PC will push a fresh session about
+                every 30 minutes while it is on.
+              </li>
+            </ol>
+            <p>
+              After that, you should not need to copy a Cookie header. If JumpCloud expires, run{" "}
+              <code>npm run sa:login</code> again.
+            </p>
+          </div>
+        ) : (
+          <p className="mt-2 text-muted">
+            This opens an Edge or Chrome window on this computer, the same way the hearings scraper
+            does. Sign in with JumpCloud once. Then run npm run sa:keep:install so this PC can push a
+            fresh session to the hosted site in the background.
+          </p>
+        )}
       </div>
 
       <label className="flex items-start gap-2 text-sm">
@@ -276,8 +305,8 @@ export function SaConnect() {
           onChange={(e) => void toggleDaily(e.target.checked)}
         />
         <span>
-          Prompt me about once a day if the shared session needs a refresh. Turn this off to keep
-          using it until State Affairs signs it out.
+          Prompt about once a day if the shared session has not been used. Leave this off so cron
+          and the PC keep-alive can run without a daily check-in.
         </span>
       </label>
 

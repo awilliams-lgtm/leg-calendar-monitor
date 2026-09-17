@@ -1,5 +1,5 @@
-import { officialEventsFor } from "@/lib/sync";
-import { loadOfficialCache, replaceStateEvents, saveOfficialCache, statePullIsStale, type OfficialCache } from "@/lib/official-cache";
+import { loadOfficialCache, saveOfficialCache, statePullIsStale, type OfficialCache } from "@/lib/official-cache";
+import { syncState } from "@/lib/sync";
 import { STATE_SOURCES } from "@/lib/states";
 
 const BATCH = 6;
@@ -25,12 +25,7 @@ export async function scrapeBatch(states?: string[]): Promise<OfficialCache> {
   await saveOfficialCache(cache);
 
   for (const code of batch) {
-    try {
-      const pulled = await officialEventsFor(code);
-      await replaceStateEvents(code, pulled.events, pulled.notes);
-    } catch (err) {
-      await replaceStateEvents(code, [], [err instanceof Error ? err.message : String(err)]);
-    }
+    await syncState(code);
   }
 
   const next = await loadOfficialCache();

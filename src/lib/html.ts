@@ -1,4 +1,6 @@
 import { execFile } from "child_process";
+import http from "http";
+import https from "https";
 import { promisify } from "util";
 
 const execFileAsync = promisify(execFile);
@@ -21,15 +23,6 @@ function browserHeaders(url: string, accept: string): Record<string, string> {
   };
 }
 
-function isCertError(err: unknown): boolean {
-  const cause =
-    typeof err === "object" && err && "cause" in err
-      ? (err as { cause?: { code?: string; message?: string } }).cause
-      : undefined;
-  const blob = `${err instanceof Error ? err.message : String(err)} ${cause?.code || ""} ${cause?.message || ""}`;
-  return /UNABLE_TO_VERIFY_LEAF_SIGNATURE|CERT_|unable to verify|self[- ]signed|ERR_TLS/i.test(blob);
-}
-
 function looksBlocked(body: string): boolean {
   const head = body.slice(0, 800).toLowerCase();
   if (/request rejected|the requested url was rejected|access denied|just a moment|cf-browser-verification|attention required/.test(head)) {
@@ -41,32 +34,145 @@ function looksBlocked(body: string): boolean {
   return false;
 }
 
-async function fetchViaWindowsCurl(
+async function fetchViaCurl(
   url: string,
   timeoutMs: number,
   accept: string,
   extraHeaders?: Record<string, string>,
   postBody?: string,
 ): Promise<string> {
-  if (process.platform !== "win32") throw new Error("curl fallback is Windows-only");
   const timeoutSec = String(Math.max(8, Math.ceil(timeoutMs / 1000)));
   const headerArgs = ["-H", `Accept: ${accept}`];
   for (const [k, v] of Object.entries(extraHeaders || {})) {
     headerArgs.push("-H", `${k}: ${v}`);
   }
-  const postArgs = postBody
-    ? ["-X", "POST", "--data", postBody]
-    : [];
-  const { stdout } = await execFileAsync(
-    "curl.exe",
-    ["-sL", "--compressed", "--max-time", timeoutSec, "-A", UA, ...headerArgs, ...postArgs, "-w", "\n__STATUS__:%{http_code}", url],
-    { maxBuffer: 12 * 1024 * 1024, windowsHide: true },
-  );
-  const marker = stdout.lastIndexOf("\n__STATUS__:");
-  const body = marker >= 0 ? stdout.slice(0, marker) : stdout;
-  const status = Number(marker >= 0 ? stdout.slice(marker + 12).trim() : 0);
-  if (status && status >= 400) throw new Error(`HTTP ${status} for ${url}`);
-  return body;
+  const postArgs = postBody ? ["-X", "POST", "--data", postBody] : [];
+  const bins = process.platform === "win32" ? ["curl.exe", "curl"] : ["curl", "curl.exe"];
+  let lastErr: unknown;
+  for (const bin of bins) {
+    try {
+      const { stdout } = await execFileAsync(
+        bin,
+        ["-sL", "--compressed", "--max-time", timeoutSec, "-A", UA, ...headerArgs, ...postArgs, "-w", "\n__STATUS__:%{http_code}", url],
+        { maxBuffer: 12 * 1024 * 1024, windowsHide: true },
+      );
+      const marker = stdout.lastIndexOf("\n__STATUS__:");
+      const body = marker >= 0 ? stdout.slice(0, marker) : stdout;
+      const status = Number(marker >= 0 ? stdout.slice(marker + 12).trim() : 0);
+      if (status && status >= 400) throw new Error(`HTTP ${status} for ${url}`);
+      return body;
+    } catch (err) {
+      lastErr = err;
+    }
+  }
+  throw lastErr instanceof Error ? lastErr : new Error(`curl failed for ${url}`);
+}
+
+function fetchViaNodeHttp(
+  url: string,
+  timeoutMs: number,
+  accept: string,
+  extraHeaders?: Record<string, string>,
+  postBody?: string,
+  hops = 0,
+): Promise<string> {
+  if (hops > 5) return Promise.reject(new Error(`too many redirects for ${url}`));
+  return new Promise((resolve, reject) => {
+    let parsed: URL;
+    try {
+      parsed = new URL(url);
+    } catch (err) {
+      reject(err);
+      return;
+    }
+    const lib = parsed.protocol === "http:" ? http : https;
+    const headers: Record<string, string> = {
+      ...browserHeaders(url, accept),
+      ...extraHeaders,
+      "Accept-Encoding": "identity",
+      Connection: "close",
+    };
+    if (postBody) headers["Content-Length"] = String(Buffer.byteLength(postBody));
+    const req = lib.request(
+      {
+        protocol: parsed.protocol,
+        hostname: parsed.hostname,
+        port: parsed.port || undefined,
+        path: `${parsed.pathname}${parsed.search}`,
+        method: postBody ? "POST" : "GET",
+        headers,
+        timeout: timeoutMs,
+      },
+      (res) => {
+        const status = res.statusCode || 0;
+        const location = res.headers.location;
+        if (status >= 300 && status < 400 && location) {
+          res.resume();
+          resolve(fetchViaNodeHttp(new URL(location, url).toString(), timeoutMs, accept, extraHeaders, undefined, hops + 1));
+          return;
+        }
+        if (status >= 400) {
+          res.resume();
+          reject(new Error(`HTTP ${status} for ${url}`));
+          return;
+        }
+        const chunks: Buffer[] = [];
+        res.on("data", (chunk) => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
+        res.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
+        res.on("error", reject);
+      },
+    );
+    req.on("error", reject);
+    req.on("timeout", () => {
+      req.destroy();
+      reject(new Error(`timeout for ${url}`));
+    });
+    if (postBody) req.write(postBody);
+    req.end();
+  });
+}
+
+async function fetchWithFallbacks(
+  url: string,
+  timeoutMs: number,
+  accept: string,
+  extraHeaders?: Record<string, string>,
+  postBody?: string,
+): Promise<string> {
+  let lastErr: unknown;
+  let blockedBody = "";
+  try {
+    const res = await fetch(url, {
+      method: postBody ? "POST" : "GET",
+      cache: "no-store",
+      redirect: "follow",
+      signal: AbortSignal.timeout(timeoutMs),
+      headers: { ...browserHeaders(url, accept), ...extraHeaders },
+      body: postBody,
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status} for ${url}`);
+    const body = await res.text();
+    if (!looksBlocked(body)) return body;
+    blockedBody = body;
+  } catch (err) {
+    lastErr = err;
+  }
+  try {
+    const viaHttp = await fetchViaNodeHttp(url, timeoutMs, accept, extraHeaders, postBody);
+    if (!looksBlocked(viaHttp)) return viaHttp;
+    if (viaHttp) blockedBody = viaHttp;
+  } catch (err) {
+    lastErr = err;
+  }
+  try {
+    const viaCurl = await fetchViaCurl(url, timeoutMs, accept, extraHeaders, postBody);
+    if (viaCurl && !looksBlocked(viaCurl)) return viaCurl;
+    if (viaCurl) return viaCurl;
+  } catch (err) {
+    lastErr = err;
+  }
+  if (blockedBody) return blockedBody;
+  throw lastErr instanceof Error ? lastErr : new Error(`fetch failed for ${url}`);
 }
 
 async function fetchBody(
@@ -75,39 +181,19 @@ async function fetchBody(
   accept: string,
   extraHeaders?: Record<string, string>,
 ): Promise<string> {
-  try {
-    const res = await fetch(url, {
-      cache: "no-store",
-      redirect: "follow",
-      signal: AbortSignal.timeout(timeoutMs),
-      headers: { ...browserHeaders(url, accept), ...extraHeaders },
-    });
-    if (!res.ok) throw new Error(`HTTP ${res.status} for ${url}`);
-    const body = await res.text();
-    if (process.platform === "win32" && looksBlocked(body)) {
-      try {
-        const viaCurl = await fetchViaWindowsCurl(url, timeoutMs, accept, extraHeaders);
-        if (viaCurl && !looksBlocked(viaCurl)) return viaCurl;
-      } catch {
-        /* keep the original body if curl also fails */
-      }
-    }
-    return body;
-  } catch (err) {
-    if (process.platform !== "win32" && !isCertError(err)) throw err;
-    try {
-      return await fetchViaWindowsCurl(url, timeoutMs, accept, extraHeaders);
-    } catch {
-      throw err;
-    }
-  }
+  return fetchWithFallbacks(url, timeoutMs, accept, extraHeaders);
 }
 
-export async function fetchText(url: string, timeoutMs = 18000): Promise<string> {
+export async function fetchText(
+  url: string,
+  timeoutMs = 18000,
+  extraHeaders?: Record<string, string>,
+): Promise<string> {
   return fetchBody(
     url,
     timeoutMs,
     "text/html,application/xhtml+xml,application/json,text/calendar,application/rss+xml;q=0.9,*/*;q=0.8",
+    extraHeaders,
   );
 }
 
@@ -117,40 +203,11 @@ export async function fetchTextPost(
   timeoutMs = 18000,
   extraHeaders?: Record<string, string>,
 ): Promise<string> {
-  const accept = "application/json, text/html, text/plain, */*";
-  const headers = {
+  return fetchWithFallbacks(url, timeoutMs, "application/json, text/html, text/plain, */*", {
     "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
     "X-Requested-With": "XMLHttpRequest",
     ...extraHeaders,
-  };
-  try {
-    const res = await fetch(url, {
-      method: "POST",
-      cache: "no-store",
-      redirect: "follow",
-      signal: AbortSignal.timeout(timeoutMs),
-      headers: { ...browserHeaders(url, accept), ...headers },
-      body,
-    });
-    if (!res.ok) throw new Error(`HTTP ${res.status} for ${url}`);
-    const text = await res.text();
-    if (process.platform === "win32" && looksBlocked(text)) {
-      try {
-        const viaCurl = await fetchViaWindowsCurl(url, timeoutMs, accept, headers, body);
-        if (viaCurl && !looksBlocked(viaCurl)) return viaCurl;
-      } catch {
-        /* keep original */
-      }
-    }
-    return text;
-  } catch (err) {
-    if (process.platform !== "win32") throw err;
-    try {
-      return await fetchViaWindowsCurl(url, timeoutMs, accept, headers, body);
-    } catch {
-      throw err;
-    }
-  }
+  }, body);
 }
 
 export function decodeEntities(value: string): string {

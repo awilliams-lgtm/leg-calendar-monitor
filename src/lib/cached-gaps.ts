@@ -4,11 +4,26 @@ import { toCalendarItems, inMonth } from "@/lib/calendar";
 import { cacheFile } from "@/lib/cache-path";
 import { MATCH_THRESHOLD, bestMatch } from "@/lib/match";
 import { loadOfficialCache } from "@/lib/official-cache";
+import { findReviewMatch, type ReviewConfirmation } from "@/lib/review";
 import { loadSaCache } from "@/lib/sa-cache";
 import { usableOfficialEvents } from "@/lib/title";
 import type { GapRow } from "@/lib/types";
 
 const DISMISS_FILE = cacheFile("dismissed-gaps.json");
+const IRRELEVANT_FILE = cacheFile("irrelevant-gaps.json");
+
+export type ReviewGapStatus = "open" | "dismissed" | "irrelevant";
+
+type StoredReview = {
+  keys?: string[];
+  items?: Array<{
+    state?: string;
+    sourceId?: string;
+    title?: string;
+    start?: string;
+    chamber?: string;
+  }>;
+};
 
 export function gapKey(state: string, sourceId: string): string {
   return `${state}|${sourceId}`;
@@ -24,23 +39,100 @@ function stableId(state: string, sourceId: string): number {
   return (h >>> 0) || 1;
 }
 
-export async function loadDismissedGapKeys(): Promise<Set<string>> {
+function itemsFromStored(parsed: StoredReview, status: "dismissed" | "irrelevant"): ReviewConfirmation[] {
+  const items = (parsed.items || [])
+    .filter((row) => row.state && row.sourceId)
+    .map((row) => ({
+      state: String(row.state),
+      officialSourceId: String(row.sourceId),
+      title: String(row.title || ""),
+      start: String(row.start || ""),
+      chamber: String(row.chamber || ""),
+      status,
+    }));
+  if (items.length) return items;
+  return (parsed.keys || []).map((key) => {
+    const cut = key.indexOf("|");
+    return {
+      state: cut === -1 ? "" : key.slice(0, cut),
+      officialSourceId: cut === -1 ? key : key.slice(cut + 1),
+      title: "",
+      start: "",
+      chamber: "",
+      status,
+    };
+  });
+}
+
+async function loadReviewFile(file: string, status: "dismissed" | "irrelevant"): Promise<ReviewConfirmation[]> {
   try {
-    const raw = await readFile(DISMISS_FILE, "utf8");
-    const parsed = JSON.parse(raw) as { keys?: string[] };
-    return new Set(parsed.keys || []);
+    const raw = await readFile(file, "utf8");
+    return itemsFromStored(JSON.parse(raw) as StoredReview, status);
   } catch {
-    return new Set();
+    return [];
   }
 }
 
-async function saveDismissed(keys: Set<string>) {
-  await mkdir(path.dirname(DISMISS_FILE), { recursive: true });
-  await writeFile(DISMISS_FILE, JSON.stringify({ keys: [...keys] }, null, 2), "utf8");
+async function saveReviewFile(file: string, items: ReviewConfirmation[]) {
+  await mkdir(path.dirname(file), { recursive: true });
+  await writeFile(
+    file,
+    JSON.stringify(
+      {
+        keys: items.map((row) => gapKey(row.state, row.officialSourceId)),
+        items: items.map((row) => ({
+          state: row.state,
+          sourceId: row.officialSourceId,
+          title: row.title,
+          start: row.start,
+          chamber: row.chamber || "",
+        })),
+      },
+      null,
+      2,
+    ),
+    "utf8",
+  );
 }
 
-export async function listCachedGaps(opts: { state?: string; month?: string }): Promise<GapRow[]> {
-  const [official, saCache, dismissed] = await Promise.all([loadOfficialCache(), loadSaCache(), loadDismissedGapKeys()]);
+export async function loadDismissedConfirmations(): Promise<ReviewConfirmation[]> {
+  return loadReviewFile(DISMISS_FILE, "dismissed");
+}
+
+export async function loadIrrelevantConfirmations(): Promise<ReviewConfirmation[]> {
+  return loadReviewFile(IRRELEVANT_FILE, "irrelevant");
+}
+
+export async function loadDismissedGapKeys(): Promise<Set<string>> {
+  const items = await loadDismissedConfirmations();
+  return new Set(items.map((row) => gapKey(row.state, row.officialSourceId)));
+}
+
+export async function loadIrrelevantGapKeys(): Promise<Set<string>> {
+  const items = await loadIrrelevantConfirmations();
+  return new Set(items.map((row) => gapKey(row.state, row.officialSourceId)));
+}
+
+function confirmedForEvent(
+  ev: { state: string; sourceId: string; title: string; start: string; chamber?: string },
+  dismissed: ReviewConfirmation[],
+  irrelevant: ReviewConfirmation[],
+): ReviewConfirmation | undefined {
+  return findReviewMatch(ev, dismissed) || findReviewMatch(ev, irrelevant);
+}
+
+export async function listCachedGaps(opts: {
+  state?: string;
+  month?: string;
+  status?: string;
+}): Promise<GapRow[]> {
+  const status = opts.status || "open";
+  const [official, saCache, dismissed, irrelevant] = await Promise.all([
+    loadOfficialCache(),
+    loadSaCache(),
+    loadDismissedConfirmations(),
+    loadIrrelevantConfirmations(),
+  ]);
   let events = usableOfficialEvents(official.events);
   if (opts.state) events = events.filter((e) => e.state === opts.state);
   if (opts.month) events = events.filter((e) => inMonth(e.start, opts.month!));
@@ -54,10 +146,15 @@ export async function listCachedGaps(opts: { state?: string; month?: string }): 
 
   const gaps: GapRow[] = [];
   for (const ev of events) {
-    if (dismissed.has(gapKey(ev.state, ev.sourceId))) continue;
+    const hit = confirmedForEvent(ev, dismissed, irrelevant);
+    if (status === "irrelevant") {
+      if (hit?.status !== "irrelevant") continue;
+    } else if (hit) {
+      continue;
+    }
     const sa = saByState.get(ev.state) || [];
     const match = bestMatch(ev, sa);
-    if (match.score >= MATCH_THRESHOLD) continue;
+    if (status !== "irrelevant" && match.score >= MATCH_THRESHOLD) continue;
     const item = toCalendarItems([ev], sa)[0];
     gaps.push({
       id: stableId(ev.state, ev.sourceId),
@@ -70,7 +167,7 @@ export async function listCachedGaps(opts: { state?: string; month?: string }): 
       url: ev.url || "",
       bills: item.bills || ev.bills || [],
       description: ev.description || "",
-      status: "open",
+      status: status === "irrelevant" ? "irrelevant" : "open",
       score: match.score,
       createdAt: "",
       saMatchTitle: item.saMatchTitle,
@@ -80,23 +177,57 @@ export async function listCachedGaps(opts: { state?: string; month?: string }): 
   return gaps;
 }
 
-export async function dismissCachedGap(opts: { id?: number; state?: string; officialSourceId?: string }) {
+export async function dismissCachedGap(opts: {
+  id?: number;
+  state?: string;
+  officialSourceId?: string;
+  title?: string;
+  start?: string;
+  chamber?: string;
+}) {
   return setCachedGapStatus("dismissed", opts);
 }
 
 export async function setCachedGapStatus(
-  status: "open" | "dismissed",
-  opts: { id?: number; state?: string; officialSourceId?: string },
+  status: ReviewGapStatus,
+  opts: {
+    id?: number;
+    state?: string;
+    officialSourceId?: string;
+    title?: string;
+    start?: string;
+    chamber?: string;
+  },
 ) {
-  const keys = await loadDismissedGapKeys();
-  let key = opts.state && opts.officialSourceId ? gapKey(opts.state, opts.officialSourceId) : "";
-  if (!key && opts.id) {
-    const gaps = await listCachedGaps({});
-    const hit = gaps.find((g) => g.id === opts.id);
-    if (hit) key = gapKey(hit.state, hit.officialSourceId);
+  const [dismissed, irrelevant, cache] = await Promise.all([
+    loadDismissedConfirmations(),
+    loadIrrelevantConfirmations(),
+    loadOfficialCache(),
+  ]);
+  let state = opts.state || "";
+  let sourceId = opts.officialSourceId || "";
+  if ((!state || !sourceId) && opts.id) {
+    const hit = cache.events.find((ev) => stableId(ev.state, ev.sourceId) === opts.id);
+    if (hit) {
+      state = hit.state;
+      sourceId = hit.sourceId;
+    }
   }
-  if (!key) return;
-  if (status === "dismissed") keys.add(key);
-  else keys.delete(key);
-  await saveDismissed(keys);
+  if (!state || !sourceId) return;
+  const ev = cache.events.find((row) => row.state === state && row.sourceId === sourceId);
+  const next: ReviewConfirmation = {
+    state,
+    officialSourceId: sourceId,
+    title: opts.title || ev?.title || "",
+    start: opts.start || ev?.start || "",
+    chamber: opts.chamber || ev?.chamber || "",
+    status: status === "open" ? "dismissed" : status,
+  };
+  const keep = (rows: ReviewConfirmation[]) =>
+    rows.filter((row) => !(row.state === state && row.officialSourceId === sourceId) && !findReviewMatch(next, [row]));
+  let nextDismissed = keep(dismissed);
+  let nextIrrelevant = keep(irrelevant);
+  if (status === "dismissed") nextDismissed = [...nextDismissed, { ...next, status: "dismissed" }];
+  if (status === "irrelevant") nextIrrelevant = [...nextIrrelevant, { ...next, status: "irrelevant" }];
+  await Promise.all([saveReviewFile(DISMISS_FILE, nextDismissed), saveReviewFile(IRRELEVANT_FILE, nextIrrelevant)]);
 }

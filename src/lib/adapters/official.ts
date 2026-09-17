@@ -59,21 +59,22 @@ export async function fetchOfficialEvents(src: StateSource): Promise<{ events: C
 
   const skipHtml =
     src.code === "SD" ||
-    src.code === "GA" ||
+    (src.code === "GA" && collected.length > 0) ||
     src.code === "IN" ||
     src.code === "NV" ||
     src.code === "KS" ||
-    src.code === "MI" ||
+    (src.code === "MI" && collected.length > 0) ||
     src.code === "RI" ||
     src.code === "WV" ||
     src.code === "IL" ||
     src.code === "ID" ||
     src.code === "US" ||
     src.code === "VA" ||
-    (["OR", "HI", "OH", "CO", "MO", "FL", "VT", "NM", "AK", "MS", "AR", "NH", "NY", "AZ", "OK", "UT", "CT", "ME", "LA", "SC", "NE", "MT", "DE", "TN"].includes(src.code) &&
+    src.code === "WI" ||
+    (["OR", "HI", "OH", "CO", "MO", "FL", "VT", "NM", "AK", "MS", "AR", "NH", "NY", "AZ", "OK", "UT", "CT", "ME", "LA", "SC", "NE", "MT", "DE", "TN", "PA"].includes(src.code) &&
       collected.length > 0) ||
     (src.code === "MA" && collected.length > 0) ||
-    (["WA", "ND", "WI", "NJ", "AL", "WY"].includes(src.code) && collected.length > 0);
+    (["WA", "ND", "NJ", "AL", "WY"].includes(src.code) && collected.length > 0);
   const feeds = skipHtml
     ? []
     : src.feeds.length
@@ -151,6 +152,7 @@ function parseByState(code: string, html: string, pageUrl: string): CalendarEven
     case "RI":
     case "WV":
     case "UT":
+    case "VT":
     case "CT":
     case "ME":
     case "LA":
@@ -302,7 +304,9 @@ async function fetchMaHearingsApi(): Promise<CalendarEvent[]> {
     if (!start) continue;
     const when = new Date(start);
     if (Number.isNaN(when.getTime()) || when < cutoff || when > horizon) continue;
-    const title = (row.Description || row.Name || "Hearing").replace(/\s+/g, " ").trim();
+    const committee = String(row.Name || "").replace(/\s+/g, " ").trim();
+    const subject = String(row.Description || "").replace(/\s+/g, " ").trim();
+    const title = committee || subject || "Hearing";
     events.push(
       ev({
         sourceId: `ma-${row.EventId}`,
@@ -310,7 +314,9 @@ async function fetchMaHearingsApi(): Promise<CalendarEvent[]> {
         title,
         start,
         location: [row.Location?.LocationName, row.Location?.City].filter(Boolean).join(", "),
+        chamber: /senate/i.test(committee) ? "senate" : /house/i.test(committee) ? "house" : "joint",
         url: `https://malegislature.gov/Events/Hearings/Detail/${row.EventId}`,
+        description: subject && subject !== title ? subject : "",
       }),
     );
   }

@@ -130,9 +130,9 @@ export const STATE_SOURCES: StateSource[] = [
     S("https://malegislature.gov/Events/Hearings?Branch=Senate"),
     J("https://malegislature.gov/Events/Hearings?Branch=Joint"),
   ]),
-  src("MI", "Michigan", "America/Detroit", "https://legislature.mi.gov/Committees/Meetings", [
-    J("https://legislature.mi.gov/Committees/Meetings", "House & Senate"),
-    J("https://legislature.mi.gov/documents/publications/RssFeeds/comschedule.xml", "Meetings RSS"),
+  src("MI", "Michigan", "America/Detroit", "https://www.legislature.mi.gov/Committees/Meetings", [
+    J("https://www.legislature.mi.gov/Committees/Meetings?sortBy=CalendarTime", "House & Senate"),
+    J("https://www.legislature.mi.gov/documents/publications/RssFeeds/comschedule.xml", "Meetings RSS"),
   ]),
   src("MN", "Minnesota", "America/Chicago", "https://www.house.mn.gov/Schedules/All", [
     H("https://www.house.mn.gov/Schedules/All"),
@@ -164,6 +164,7 @@ export const STATE_SOURCES: StateSource[] = [
   ]),
   src("NM", "New Mexico", "America/Denver", "https://www.nmlegis.gov/Calendar/Whats_Happening", [
     J("https://www.nmlegis.gov/Calendar/Whats_Happening", "What's Happening"),
+    J("https://www.nmlegis.gov/Calendar/Session", "Session calendar"),
   ]),
   src("NY", "New York", "America/New_York", "https://www.nyassembly.gov/leg/?sh=hear", [
     H("https://www.nyassembly.gov/leg/?sh=hear", "Assembly hearings"),
@@ -191,8 +192,9 @@ export const STATE_SOURCES: StateSource[] = [
     H("https://www.palegis.us/house/committees/meeting-schedule"),
     S("https://www.palegis.us/senate/committees/meeting-schedule"),
   ]),
-  src("RI", "Rhode Island", "America/New_York", "https://www.rilegislature.gov/CalendarEvent/CalendarEvent.aspx", [
-    J("https://www.rilegislature.gov/CalendarEvent/CalendarEvent.aspx", "Legislative calendar"),
+  src("RI", "Rhode Island", "America/New_York", "https://www.rilegislature.gov/Pages/Default.aspx", [
+    J("https://www.rilegislature.gov/Pages/Default.aspx", "Legislative calendar"),
+    J("https://www.rilegislature.gov/CalendarEvent/CalendarEvent.aspx", "Calendar events"),
     J("https://status.rilegislature.gov/legislative_committee_calendar.aspx", "Committee calendar"),
   ]),
   src("SC", "South Carolina", "America/New_York", "https://www.scstatehouse.gov/meetings.php?chamber=H", [
@@ -221,7 +223,11 @@ export const STATE_SOURCES: StateSource[] = [
     J("https://le.utah.gov/asp/interim/Cal.asp", "Interim calendar"),
   ]),
   src("VT", "Vermont", "America/New_York", "https://legislature.vermont.gov/committee/meetings/2026", [
-    J("https://legislature.vermont.gov/committee/meetings/2026", "Committee meetings"),
+    H("https://legislature.vermont.gov/house/service/2026/calendar", "House calendars"),
+    S("https://legislature.vermont.gov/senate/service/2026/calendar", "Senate calendars"),
+    J("https://legislature.vermont.gov/committee/list/2026/House-Standing", "Standing committees"),
+    J("https://legislature.vermont.gov/committee/meetings/2026#leg-committees", "Other scheduled meetings"),
+    J("https://legislature.vermont.gov/committee/weeklyAgendas/2026", "Weekly committee agendas"),
   ]),
   src("VA", "Virginia", "America/New_York", "https://lis.virginia.gov/", [
     J("https://liscdn.blob.core.windows.net/cdn/meetings.ics", "Meetings ICS"),
@@ -235,8 +241,8 @@ export const STATE_SOURCES: StateSource[] = [
   src("WV", "West Virginia", "America/New_York", "https://www.wvlegislature.gov/committees/interims/intcomsched.cfm", [
     J("https://www.wvlegislature.gov/committees/interims/intcomsched.cfm", "Interim schedule"),
   ]),
-  src("WI", "Wisconsin", "America/Chicago", "https://docs.legis.wisconsin.gov/2025/related/hearings", [
-    J("https://docs.legis.wisconsin.gov/feed/2025/related/hearings", "Hearing RSS"),
+  src("WI", "Wisconsin", "America/Chicago", "https://committeeschedule.legis.wisconsin.gov/", [
+    J("https://committeeschedule.legis.wisconsin.gov/", "Committee schedule"),
   ]),
   src("WY", "Wyoming", "America/Denver", "https://wyoleg.gov/Calendar", [
     H("https://wyoleg.gov/Calendar?chamber=H"),

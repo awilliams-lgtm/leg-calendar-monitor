@@ -4,13 +4,21 @@ import type { CalendarEvent } from "@/lib/types";
 import { upcomingWindow } from "@/lib/dates";
 import { isHiddenMeeting } from "@/lib/hidden";
 import { eventDateKey, extractBills } from "@/lib/match";
+import { mapPool } from "@/lib/html";
 import {
   GET_HEARINGS_QUERY,
+  MEETINGS_SEARCH_V2_QUERY,
   PROFILE_QUERY,
   SA_GRAPHQL_URL,
   STATE_CONFIGS_QUERY,
 } from "@/lib/sa-graphql";
-import { loadSession, markSessionOk, saConfigured as sessionConfigured } from "@/lib/sa-session";
+import {
+  bearerFromCookieHeader,
+  loadSession,
+  markSessionOk,
+  persistResponseCookies,
+  saConfigured as sessionConfigured,
+} from "@/lib/sa-session";
 import { STATE_SOURCES } from "@/lib/states";
 
 type SaRow = {
@@ -76,7 +84,8 @@ async function saHeaders(): Promise<HeadersInit> {
   };
   const session = await loadSession();
   if (session.cookie) headers.cookie = session.cookie;
-  if (session.bearer) headers.authorization = `Bearer ${session.bearer}`;
+  const bearer = session.bearer || bearerFromCookieHeader(session.cookie);
+  if (bearer) headers.authorization = `Bearer ${bearer}`;
   return headers;
 }
 
@@ -96,6 +105,7 @@ async function saQuery<T>(query: string, variables: Record<string, unknown>, ope
     cache: "no-store",
     body: JSON.stringify({ operationName, query, variables }),
   });
+  await persistResponseCookies(res).catch(() => undefined);
   const payload = (await res.json().catch(() => ({}))) as { data?: T; errors?: { message?: string }[] };
   if (!res.ok) {
     throw new Error(`SA GraphQL HTTP ${res.status}`);
@@ -311,7 +321,31 @@ async function fetchHearings(stateCode: string, stateId: number): Promise<Calend
   return events;
 }
 
-let adminWindowCache: { at: number; from: string; to: string; byState: Map<string, CalendarEvent[]> } | null = null;
+let adminWindowCache: {
+  at: number;
+  from: string;
+  to: string;
+  codes: string;
+  have: Set<string>;
+  byState: Map<string, CalendarEvent[]>;
+} | null = null;
+
+function rememberAdminWindow(
+  from: string,
+  to: string,
+  byState: Map<string, CalendarEvent[]>,
+  onlyCodes?: Set<string>,
+) {
+  const have = new Set(onlyCodes?.size ? onlyCodes : byState.keys());
+  adminWindowCache = {
+    at: Date.now(),
+    from,
+    to,
+    codes: onlyCodes?.size ? [...onlyCodes].sort().join(",") : "*",
+    have,
+    byState,
+  };
+}
 
 export function clearSaAdminWindowCache() {
   adminWindowCache = null;
@@ -377,6 +411,9 @@ export async function importCapturedSaMeetings(
   }
 }
 
+const MEETINGS_PAGE_SIZE = 100;
+const MEETINGS_MAX_PAGES = 250;
+
 async function fetchSavedMeetingsWindow(
   from: string,
   to: string,
@@ -385,11 +422,11 @@ async function fetchSavedMeetingsWindow(
   const saved = await loadSavedMeetingsQuery();
   if (!saved?.query) return null;
   const original = saved.variables || {};
-  const itemsPerPage = Number(original.itemsPerPage) || 20;
+  const itemsPerPage = Math.max(Number(original.itemsPerPage) || 20, MEETINGS_PAGE_SIZE);
   const operationName = saved.operationName || "MeetingsSearchV2";
   const zeroBased = /meetingsSearchV2/i.test(saved.query);
   const rows: SaRow[] = [];
-  for (let i = 0; i < 80; i++) {
+  for (let i = 0; i < MEETINGS_MAX_PAGES; i++) {
     const page = zeroBased ? i : i + 1;
     const variables: Record<string, unknown> = { ...original, page, itemsPerPage };
     if ("startDate" in original) variables.startDate = from;
@@ -399,23 +436,124 @@ async function fetchSavedMeetingsWindow(
     const listed = listPayload(data);
     const chunk = listed?.data || [];
     rows.push(...chunk);
-    const total = listed?.total_count || 0;
-    if (!chunk.length || (i + 1) * itemsPerPage >= total) break;
+    if (!chunk.length || chunk.length < itemsPerPage) break;
   }
   return rowsToByState(rows, codeById, from, to);
 }
 
-export async function fetchSaAdminWindow(fromDay?: string, toDay?: string): Promise<Map<string, CalendarEvent[]>> {
+async function fetchMeetingsSearchRows(from: string, to: string, stateId?: number): Promise<SaRow[]> {
+  const rows: SaRow[] = [];
+  const itemsPerPage = MEETINGS_PAGE_SIZE;
+  for (let page = 0; page < MEETINGS_MAX_PAGES; page++) {
+    const data = await saQuery<Record<string, ListPayload | undefined>>(
+      MEETINGS_SEARCH_V2_QUERY,
+      {
+        page,
+        itemsPerPage,
+        startDate: from,
+        endDate: to,
+        includeHidden: false,
+        ...(typeof stateId === "number" ? { state: stateId } : {}),
+      },
+      "MeetingsSearchV2",
+    );
+    const listed = listPayload(data);
+    const chunk = listed?.data || [];
+    rows.push(...chunk);
+    if (!chunk.length || chunk.length < itemsPerPage) break;
+  }
+  return rows;
+}
+
+async function fetchHearingsWindow(
+  from: string,
+  to: string,
+  codeById: Map<number, string>,
+  onlyCodes?: Set<string>,
+): Promise<Map<string, CalendarEvent[]>> {
+  const pairs = [...codeById.entries()].filter(([, code]) => !onlyCodes?.size || onlyCodes.has(code));
+  const parts = await mapPool(pairs, 4, async ([id, code]) => {
+    try {
+      const events = await fetchHearings(code, id);
+      const map = new Map<string, CalendarEvent[]>();
+      map.set(
+        code,
+        events.filter((ev) => {
+          const day = eventDateKey(ev.start) || saEventDay(ev.start);
+          return Boolean(day && day >= from && day <= to);
+        }),
+      );
+      return map;
+    } catch {
+      return new Map<string, CalendarEvent[]>();
+    }
+  });
+  return mergeByState(parts);
+}
+
+function mergeByState(parts: Map<string, CalendarEvent[]>[]): Map<string, CalendarEvent[]> {
+  const byState = new Map<string, CalendarEvent[]>();
+  const have = new Set<string>();
+  for (const part of parts) {
+    for (const [code, list] of part) {
+      const cur = byState.get(code) || [];
+      for (const ev of list) {
+        const key = `${code}:${ev.sourceId}`;
+        if (have.has(key)) continue;
+        have.add(key);
+        cur.push(ev);
+      }
+      byState.set(code, cur);
+    }
+  }
+  return byState;
+}
+
+async function fetchMeetingsSearchWindow(
+  from: string,
+  to: string,
+  codeById: Map<number, string>,
+  onlyCodes?: Set<string>,
+): Promise<Map<string, CalendarEvent[]>> {
+  const pairs = [...codeById.entries()].filter(([, code]) => !onlyCodes?.size || onlyCodes.has(code));
+  const parts = await mapPool(pairs, 6, async ([id]) => {
+    try {
+      const rows = await fetchMeetingsSearchRows(from, to, id);
+      return rowsToByState(rows, codeById, from, to);
+    } catch {
+      return new Map<string, CalendarEvent[]>();
+    }
+  });
+  return mergeByState(parts);
+}
+
+function sliceAdminWindow(byState: Map<string, CalendarEvent[]>, onlyCodes?: Set<string>) {
+  if (!onlyCodes?.size) return byState;
+  const sliced = new Map<string, CalendarEvent[]>();
+  for (const code of onlyCodes) {
+    const list = byState.get(code);
+    if (list?.length) sliced.set(code, list);
+  }
+  return sliced;
+}
+
+export async function fetchSaAdminWindow(
+  fromDay?: string,
+  toDay?: string,
+  onlyStates?: string[],
+): Promise<Map<string, CalendarEvent[]>> {
   const window = upcomingWindow();
   const from = fromDay || window.from;
   const to = toDay || window.to;
+  const onlyCodes = onlyStates?.length ? new Set(onlyStates.map((s) => s.toUpperCase())) : undefined;
   if (
     adminWindowCache &&
     adminWindowCache.from === from &&
     adminWindowCache.to === to &&
-    Date.now() - adminWindowCache.at < 5 * 60 * 1000
+    Date.now() - adminWindowCache.at < 5 * 60 * 1000 &&
+    (adminWindowCache.codes === "*" || (onlyCodes && [...onlyCodes].every((code) => adminWindowCache!.have.has(code))))
   ) {
-    return adminWindowCache.byState;
+    return sliceAdminWindow(adminWindowCache.byState, onlyCodes);
   }
 
   const ids = await saStateIdMap();
@@ -423,10 +561,29 @@ export async function fetchSaAdminWindow(fromDay?: string, toDay?: string): Prom
   for (const [code, id] of ids) codeById.set(id, code);
 
   try {
+    const fromSearch = await fetchMeetingsSearchWindow(from, to, codeById, onlyCodes);
+    let merged = fromSearch;
+    if (onlyCodes?.size) {
+      try {
+        const hearings = await fetchHearingsWindow(from, to, codeById, onlyCodes);
+        merged = mergeByState([fromSearch, hearings]);
+      } catch {
+        /* hearings list is optional when meetings search already returned rows */
+      }
+    }
+    if ([...merged.values()].some((list) => list.length)) {
+      rememberAdminWindow(from, to, merged, onlyCodes);
+      return merged;
+    }
+  } catch {
+    /* MeetingsSearchV2 needs a signed-in session; fall back */
+  }
+
+  try {
     const fromQuery = await fetchSavedMeetingsWindow(from, to, codeById);
     if (fromQuery && [...fromQuery.values()].some((list) => list.length)) {
-      adminWindowCache = { at: Date.now(), from, to, byState: fromQuery };
-      return fromQuery;
+      rememberAdminWindow(from, to, fromQuery);
+      return sliceAdminWindow(fromQuery, onlyCodes);
     }
   } catch {
     /* saved meetings query is optional */
@@ -434,8 +591,8 @@ export async function fetchSaAdminWindow(fromDay?: string, toDay?: string): Prom
 
   const captured = await importCapturedSaMeetings(from, to);
   if (captured && [...captured.values()].some((list) => list.length)) {
-    adminWindowCache = { at: Date.now(), from, to, byState: captured };
-    return captured;
+    rememberAdminWindow(from, to, captured);
+    return sliceAdminWindow(captured, onlyCodes);
   }
 
   const byState = new Map<string, CalendarEvent[]>();
@@ -481,8 +638,8 @@ export async function fetchSaAdminWindow(fromDay?: string, toDay?: string): Prom
     if (!inWindow && days.length && days[days.length - 1] < from && page > 1) break;
   }
 
-  adminWindowCache = { at: Date.now(), from, to, byState };
-  return byState;
+  rememberAdminWindow(from, to, byState);
+  return sliceAdminWindow(byState, onlyCodes);
 }
 
 export async function fetchSaUpcoming(
@@ -492,7 +649,7 @@ export async function fetchSaUpcoming(
   toDay?: string,
 ): Promise<CalendarEvent[]> {
   const window = upcomingWindow();
-  const byState = await fetchSaAdminWindow(fromDay || window.from, toDay || window.to);
+  const byState = await fetchSaAdminWindow(fromDay || window.from, toDay || window.to, [stateCode]);
   return byState.get(stateCode) || [];
 }
 

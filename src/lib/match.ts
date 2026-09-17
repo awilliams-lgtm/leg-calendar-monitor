@@ -37,6 +37,22 @@ const MONTHS =
 
 const WEAK = new Set(["assembly", "senate", "house", "legislature"]);
 
+const ABBR: Record<string, string[]> = {
+  ed: ["education"],
+  educ: ["education"],
+  gov: ["government"],
+  govt: ["government"],
+  op: ["operations"],
+  ops: ["operations"],
+  gw: ["general", "welfare"],
+  trans: ["transportation"],
+  ag: ["agriculture"],
+  agric: ["agriculture"],
+  jud: ["judiciary"],
+  appr: ["appropriations"],
+  approps: ["appropriations"],
+};
+
 export function extractBills(text: string): string[] {
   const found = new Set<string>();
   const src = text || "";
@@ -74,6 +90,13 @@ export function eventDateKey(iso: string): string {
   return /^\d{4}-\d{2}-\d{2}$/.test(d) ? d : "";
 }
 
+function dayOffset(a: string, b: string): number {
+  const t1 = Date.parse(`${a}T12:00:00Z`);
+  const t2 = Date.parse(`${b}T12:00:00Z`);
+  if (!Number.isFinite(t1) || !Number.isFinite(t2)) return 99;
+  return Math.round((t2 - t1) / 86_400_000);
+}
+
 function forMatch(text: string): string {
   return (text || "")
     .replace(/https?:\/\/\S+/gi, " ")
@@ -91,13 +114,34 @@ function forMatch(text: string): string {
 }
 
 function tokens(text: string): Set<string> {
-  return new Set(
-    forMatch(text)
-      .toLowerCase()
-      .replace(/[^a-z0-9\s]/g, " ")
-      .split(/\s+/)
-      .filter((w) => w.length > 1 && !STOP.has(w)),
-  );
+  const out = new Set<string>();
+  for (const w of forMatch(text)
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, " ")
+    .split(/\s+/)
+    .filter((tok) => tok.length > 1 && !STOP.has(tok))) {
+    for (const part of ABBR[w] || [w]) {
+      if (part.length > 1 && !STOP.has(part)) out.add(part);
+    }
+  }
+  return out;
+}
+
+function matchPhrase(text: string): string {
+  return forMatch(text)
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function phraseContains(officialTitle: string, saTitle: string): boolean {
+  const a = matchPhrase(officialTitle);
+  const b = matchPhrase(saTitle);
+  if (!a || !b) return false;
+  const [shorter, longer] = a.length <= b.length ? [a, b] : [b, a];
+  if (shorter.length < 16 || !longer.includes(shorter)) return false;
+  return shorter.split(" ").filter(Boolean).length >= 3;
 }
 
 function dice(a: Set<string>, b: Set<string>): number {
@@ -123,6 +167,7 @@ function titleScore(officialTitle: string, saTitle: string): number {
     const only = [...smaller][0] || "";
     if (only.length >= 8) score = Math.max(score, 0.8);
   }
+  if (phraseContains(officialTitle, saTitle)) score = Math.max(score, 0.84);
   return score;
 }
 
@@ -147,7 +192,9 @@ export type MatchResult = { score: number; title: string };
 export function scorePair(official: Matchable, sa: Matchable): number {
   const d1 = eventDateKey(official.start);
   const d2 = eventDateKey(sa.start);
-  if (!d1 || !d2 || d1 !== d2) return 0;
+  if (!d1 || !d2) return 0;
+  const offset = Math.abs(dayOffset(d1, d2));
+  if (offset > 1) return 0;
 
   const billsA = official.bills?.length ? official.bills : extractBills(official.title);
   const billsB = sa.bills?.length ? sa.bills : extractBills(sa.title);
@@ -160,6 +207,10 @@ export function scorePair(official: Matchable, sa: Matchable): number {
   let score = titleScore(official.title, sa.title);
   if (billHit) score = Math.max(score, 0.86);
   if (!chamberOk) score *= 0.7;
+  if (offset === 1) {
+    if (score < 0.74) return 0;
+    score *= 0.9;
+  }
   return score;
 }
 
@@ -168,6 +219,15 @@ export function bestMatch(official: Matchable, saEvents: Matchable[]): MatchResu
   for (const sa of saEvents) {
     const score = scorePair(official, sa);
     if (score > best.score) best = { score, title: sa.title };
+  }
+  return best;
+}
+
+export function bestMatchEvent<T extends Matchable>(official: Matchable, events: T[]): { score: number; event?: T } {
+  let best: { score: number; event?: T } = { score: 0 };
+  for (const ev of events) {
+    const score = scorePair(official, ev);
+    if (score > best.score) best = { score, event: ev };
   }
   return best;
 }

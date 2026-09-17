@@ -40,7 +40,7 @@ const empty = (): SaSession => ({
   source: "none",
   savedAt: "",
   lastOkAt: "",
-  promptDaily: true,
+  promptDaily: false,
 });
 
 let memory: SaSession | null = null;
@@ -106,16 +106,32 @@ export function cookiesToHeader(cookies: CookieLike[]): string {
   return [...byName.entries()].map(([name, value]) => `${name}=${value}`).join("; ");
 }
 
+export function bearerFromCookieHeader(cookie: string): string {
+  const map = new Map<string, string>();
+  for (const part of cookie.split(";")) {
+    const trimmed = part.trim();
+    const eq = trimmed.indexOf("=");
+    if (eq <= 0) continue;
+    map.set(trimmed.slice(0, eq), trimmed.slice(eq + 1));
+  }
+  return map.get("admin_token") || map.get("token") || "";
+}
+
 export function parseSessionInput(raw: string): { cookie: string; bearer: string } {
   const text = raw.trim();
   if (!text) return { cookie: "", bearer: "" };
   if (text.startsWith("{")) {
     const json = JSON.parse(text) as { cookies?: CookieLike[]; cookie?: string; bearer?: string };
-    if (Array.isArray(json.cookies)) return { cookie: cookiesToHeader(json.cookies), bearer: json.bearer || "" };
-    return { cookie: String(json.cookie || ""), bearer: String(json.bearer || "") };
+    if (Array.isArray(json.cookies)) {
+      const cookie = cookiesToHeader(json.cookies);
+      return { cookie, bearer: json.bearer || bearerFromCookieHeader(cookie) };
+    }
+    const cookie = String(json.cookie || "");
+    return { cookie, bearer: String(json.bearer || bearerFromCookieHeader(cookie)) };
   }
   if (/^bearer\s+/i.test(text)) return { cookie: "", bearer: text.replace(/^bearer\s+/i, "").trim() };
-  return { cookie: text.replace(/^cookie:\s*/i, "").trim(), bearer: "" };
+  const cookie = text.replace(/^cookie:\s*/i, "").trim();
+  return { cookie, bearer: bearerFromCookieHeader(cookie) };
 }
 
 function publicView(session: SaSession, extra: { playwrightFound: boolean; fromEnv: boolean }): SaSessionPublic {
@@ -223,8 +239,10 @@ export async function loadSession(opts?: { reload?: boolean }): Promise<SaSessio
 
 export async function saveSession(next: SaSession) {
   memory = next;
+  if (databaseUrl()) {
+    await writeDbSession(next);
+  }
   await writeFileSession(next).catch(() => undefined);
-  await writeDbSession(next).catch(() => undefined);
 }
 
 export async function clearSession() {
@@ -257,7 +275,7 @@ export async function importPlaywrightSession(): Promise<SaSession> {
         source: "playwright",
         savedAt: new Date().toISOString(),
         lastOkAt: "",
-        promptDaily: true,
+        promptDaily: false,
       };
       await saveSession(session);
       return session;
@@ -275,6 +293,38 @@ export async function sessionStatus(opts?: { reload?: boolean }): Promise<SaSess
     playwrightFound: await playwrightAuthAvailable(),
     fromEnv,
   });
+}
+
+export function mergeCookieHeader(current: string, setCookieHeaders: string[]): string {
+  const map = new Map<string, string>();
+  for (const part of current.split(";")) {
+    const trimmed = part.trim();
+    if (!trimmed) continue;
+    const eq = trimmed.indexOf("=");
+    if (eq <= 0) continue;
+    map.set(trimmed.slice(0, eq), trimmed.slice(eq + 1));
+  }
+  for (const header of setCookieHeaders) {
+    const pair = header.split(";")[0]?.trim() || "";
+    const eq = pair.indexOf("=");
+    if (eq <= 0) continue;
+    const name = pair.slice(0, eq);
+    const value = pair.slice(eq + 1);
+    if (!value || value === "deleted") map.delete(name);
+    else map.set(name, value);
+  }
+  return [...map.entries()].map(([name, value]) => `${name}=${value}`).join("; ");
+}
+
+export async function persistResponseCookies(res: Response) {
+  const headers = typeof res.headers.getSetCookie === "function" ? res.headers.getSetCookie() : [];
+  if (!headers.length) return;
+  const session = await loadSession();
+  if (!session.cookie && !session.bearer) return;
+  const next = mergeCookieHeader(session.cookie, headers);
+  if (next === session.cookie) return;
+  session.cookie = next;
+  await saveSession(session);
 }
 
 export async function markSessionOk(profile?: { email?: string; name?: string }) {

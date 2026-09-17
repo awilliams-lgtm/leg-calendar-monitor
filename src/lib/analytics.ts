@@ -1,11 +1,11 @@
 import { toCalendarItems } from "@/lib/calendar";
 import { eventDay, monthBounds } from "@/lib/dates";
-import { loadHandledOfficialKeys } from "@/lib/handled";
-import { isHiddenMeeting } from "@/lib/hidden";
+import { databaseUrl } from "@/lib/db";
+import { expandReviewKeysFor, loadReviewOfficialKeys } from "@/lib/handled";
 import { loadOfficialCache } from "@/lib/official-cache";
 import { loadSaCache, saByStateMap } from "@/lib/sa-cache";
 import { chamberBucket, STATE_SOURCES } from "@/lib/states";
-import { usableOfficialEvents } from "@/lib/title";
+import { usableOfficialEvents, usableSaEvents } from "@/lib/title";
 import type { CalendarEvent } from "@/lib/types";
 
 export type AnalyticsChamber = "house" | "senate" | "other";
@@ -45,29 +45,31 @@ function monthsFrom(events: CalendarEvent[]): string[] {
   return [...set].sort().reverse();
 }
 
-export async function buildAnalytics(month: string): Promise<AnalyticsPayload> {
-  const [officialCache, saCache, handled] = await Promise.all([
-    loadOfficialCache(),
-    loadSaCache(),
-    loadHandledOfficialKeys(),
-  ]);
-  const allMonths = monthsFrom([...officialCache.events, ...saCache.events]);
+function payloadFromEvents(
+  month: string,
+  officialEvents: CalendarEvent[],
+  saEvents: CalendarEvent[],
+  handled: Set<string>,
+  irrelevant: Set<string>,
+  months: string[],
+  officialUpdatedAt: string,
+  saUpdatedAt: string,
+): AnalyticsPayload {
   const useAll = month === "all";
   const officialSrc = useAll
-    ? usableOfficialEvents(officialCache.events)
-    : usableOfficialEvents(officialCache.events).filter((e) => e.start.slice(0, 7) === month);
-  const saSrc = (useAll ? saCache.events : saCache.events.filter((e) => e.start.slice(0, 7) === month)).filter(
-    (e) => !isHiddenMeeting(e),
-  );
-  const saByState = saByStateMap(saCache.events);
+    ? usableOfficialEvents(officialEvents)
+    : usableOfficialEvents(officialEvents).filter((e) => e.start.slice(0, 7) === month);
+  const saSrc = usableSaEvents(useAll ? saEvents : saEvents.filter((e) => e.start.slice(0, 7) === month));
+  const saByState = saByStateMap(saEvents);
 
   const official: AnalyticsOfficial[] = [];
   for (const src of STATE_SOURCES) {
     const rows = officialSrc.filter((e) => e.state === src.code);
     if (!rows.length) continue;
     const sa = saByState.get(src.code) || [];
-    const items = toCalendarItems(rows, sa, handled);
+    const items = toCalendarItems(rows, sa, handled, irrelevant);
     for (const item of items) {
+      if (item.irrelevant) continue;
       const day = eventDay(item.start);
       if (!day) continue;
       official.push({
@@ -87,18 +89,59 @@ export async function buildAnalytics(month: string): Promise<AnalyticsPayload> {
     }))
     .filter((ev) => /^\d{4}-\d{2}-\d{2}$/.test(ev.day));
 
-  const label = useAll ? "All cached dates" : monthBounds(month).label;
-
   return {
     ok: true,
     month,
-    label,
-    months: allMonths,
-    officialUpdatedAt: officialCache.updatedAt,
-    saUpdatedAt: saCache.updatedAt,
-    saConnected: saCache.events.length > 0,
+    label: useAll ? "All cached dates" : monthBounds(month).label,
+    months,
+    officialUpdatedAt,
+    saUpdatedAt,
+    saConnected: saEvents.length > 0,
     official,
     sa,
     states: STATE_SOURCES.map((s) => ({ code: s.code, name: s.name })),
   };
+}
+
+export async function buildAnalytics(month: string): Promise<AnalyticsPayload> {
+  if (databaseUrl()) {
+    const { calendarFeedStats, eventMonthKeys, eventsInRange } = await import("@/lib/data");
+    const useAll = month === "all";
+    const { official, sa } = await eventsInRange(useAll ? undefined : month);
+    const months = await eventMonthKeys();
+    const feed = await calendarFeedStats();
+    const review = await loadReviewOfficialKeys();
+    const keys = expandReviewKeysFor(review, official);
+    return payloadFromEvents(
+      month,
+      official,
+      sa,
+      keys.handled,
+      keys.irrelevant,
+      months,
+      feed.officialUpdatedAt,
+      feed.saUpdatedAt,
+    );
+  }
+
+  const [officialCache, saCache, review] = await Promise.all([
+    loadOfficialCache(),
+    loadSaCache(),
+    loadReviewOfficialKeys(),
+  ]);
+  const officialSrc = usableOfficialEvents(officialCache.events);
+  const keys = expandReviewKeysFor(
+    review,
+    month === "all" ? officialSrc : officialSrc.filter((e) => e.start.slice(0, 7) === month),
+  );
+  return payloadFromEvents(
+    month,
+    officialCache.events,
+    saCache.events,
+    keys.handled,
+    keys.irrelevant,
+    monthsFrom([...officialCache.events, ...saCache.events]),
+    officialCache.updatedAt,
+    saCache.updatedAt,
+  );
 }

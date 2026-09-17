@@ -1,12 +1,12 @@
 import { fetchOfficialEvents } from "@/lib/adapters/official";
 import { fetchOpenStatesEvents } from "@/lib/adapters/openstates";
-import { replaceStateEvents } from "@/lib/official-cache";
+import { loadOfficialCache, replaceStateEvents } from "@/lib/official-cache";
+import { refreshSaMeetings } from "@/lib/sa-refresh";
 import {
   compareState,
   eventsForState,
   insertNotification,
   recordSyncRun,
-  upsertEvents,
 } from "@/lib/data";
 import { formatGapAlert, notifyEmail, notifySlack } from "@/lib/notify";
 import { STATE_SOURCES, stateByCode } from "@/lib/states";
@@ -73,6 +73,8 @@ export async function officialEventsFor(code: string): Promise<{ events: Calenda
 }
 
 async function emit(kind: "new_official" | "missing_on_sa", ev: CalendarEvent, state: string) {
+  const { isClosedFacilityNotice, junkOfficialEvent } = await import("@/lib/title");
+  if (isClosedFacilityNotice(ev.title) || junkOfficialEvent(ev)) return;
   const created = await insertNotification({
     kind,
     state,
@@ -100,20 +102,43 @@ export async function syncState(code: string): Promise<SyncResult> {
     const pulled = await officialEventsFor(state);
     result.notes = pulled.notes;
     const official = pulled.events;
-    await replaceStateEvents(state, official, pulled.notes).catch(() => undefined);
-    const off = await upsertEvents("official", state, official);
-    result.officialUpserted = off.upserted;
-    result.newOfficial = off.newIds.length;
-    await recordSyncRun(state, "official", off.upserted);
-    const officialById = new Map(official.map((e) => [e.sourceId, e]));
-    for (const id of off.newIds) {
-      const ev = officialById.get(id);
-      if (ev) await emit("new_official", ev, state);
+    const cache = await loadOfficialCache();
+    const existing = cache.events.filter((e) => e.state === state);
+    const failed = (pulled.notes || []).some((note) => /\bfailed\b/i.test(note));
+    if (failed && official.length === 0 && existing.length > 0) {
+      result.error = `Kept ${existing.length} last-good official meetings; scrape returned 0.`;
+      await recordSyncRun(state, "official", 0, result.error);
+    } else {
+      await replaceStateEvents(state, official, pulled.notes);
+      result.officialUpserted = official.length;
+      result.newOfficial = official.filter((ev) => !existing.some((e) => e.sourceId === ev.sourceId)).length;
+      await recordSyncRun(state, "official", official.length);
+      const existingIds = new Set(existing.map((e) => e.sourceId));
+      for (const ev of official) {
+        if (!existingIds.has(ev.sourceId)) await emit("new_official", ev, state);
+      }
     }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     result.error = message;
     await recordSyncRun(state, "official", 0, message);
+  }
+
+  try {
+    const sa = await refreshSaMeetings([state], { force: true });
+    if (sa.skipped) {
+      const reason = "reason" in sa && sa.reason ? sa.reason : "no-session";
+      result.notes = [...(result.notes || []), `SA ${state} skipped (${reason})`];
+    } else {
+      const { loadSaCache } = await import("@/lib/sa-cache");
+      result.saUpserted = (await loadSaCache()).events.filter((e) => e.state === state).length;
+      result.notes = [...(result.notes || []), `SA ${state} → ${result.saUpserted}`];
+    }
+  } catch (err) {
+    result.notes = [
+      ...(result.notes || []),
+      `SA ${state} failed: ${err instanceof Error ? err.message : String(err)}`,
+    ];
   }
 
   if (databaseUrl()) {

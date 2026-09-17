@@ -70,6 +70,16 @@ function cookieHeader(cookies) {
   return [...byName.entries()].map(([name, value]) => `${name}=${value}`).join("; ");
 }
 
+function bearerFromCookie(cookie) {
+  const map = new Map();
+  for (const part of String(cookie || "").split(";")) {
+    const trimmed = part.trim();
+    const eq = trimmed.indexOf("=");
+    if (eq > 0) map.set(trimmed.slice(0, eq), trimmed.slice(eq + 1));
+  }
+  return map.get("admin_token") || map.get("token") || "";
+}
+
 function looksLikeLogin(url, title = "") {
   const u = String(url || "").toLowerCase();
   const t = String(title || "").toLowerCase();
@@ -120,13 +130,13 @@ function writeSession(storage) {
   const cookie = cookieHeader(storage.cookies || []);
   const session = {
     cookie,
-    bearer: existing.bearer || "",
+    bearer: bearerFromCookie(cookie) || existing.bearer || "",
     email: existing.email || "",
     name: existing.name || "",
     source: "playwright",
     savedAt: new Date().toISOString(),
     lastOkAt: existing.lastOkAt || "",
-    promptDaily: existing.promptDaily !== false,
+    promptDaily: existing.promptDaily === true,
   };
   writeFileSync(sessionFile, JSON.stringify(session, null, 2));
 }
@@ -163,11 +173,11 @@ async function waitForLogin(page, waitMs = 15 * 60 * 1000) {
 async function replayPages(page, capturedQuery, from, to) {
   const rows = [];
   const original = capturedQuery.variables || {};
-  const itemsPerPage = Number(original.itemsPerPage) || 20;
+  const itemsPerPage = Math.max(Number(original.itemsPerPage) || 20, 100);
   const operationName = capturedQuery.operationName || "MeetingsSearchV2";
   const zeroBased = /meetingsSearchV2/i.test(capturedQuery.query || "");
   let total = 0;
-  for (let i = 0; i < 80; i++) {
+  for (let i = 0; i < 250; i++) {
     const pageNo = zeroBased ? i : i + 1;
     const variables = { ...original, page: pageNo, itemsPerPage };
     if ("startDate" in original) variables.startDate = from;
@@ -192,8 +202,8 @@ async function replayPages(page, capturedQuery, from, to) {
     const chunk = listed?.payload?.data || [];
     total = listed?.payload?.totalMeetingCount || listed?.payload?.total_count || total;
     rows.push(...chunk);
-    log(`Meetings page ${zeroBased ? i + 1 : pageNo}: ${chunk.length} rows (total ${total || rows.length})`);
-    if (!chunk.length || (i + 1) * itemsPerPage >= total) break;
+    log(`Meetings page ${zeroBased ? i + 1 : pageNo}: ${chunk.length} rows (kept ${rows.length}, reported ${total || rows.length})`);
+    if (!chunk.length || chunk.length < itemsPerPage) break;
   }
   return rows;
 }

@@ -32,7 +32,7 @@ export function SiteHeader() {
       }
     }
     void load();
-    const tick = window.setInterval(load, 8000);
+    const tick = window.setInterval(load, 60_000);
     return () => {
       cancelled = true;
       window.clearInterval(tick);
@@ -42,11 +42,13 @@ export function SiteHeader() {
   return (
     <header className="border-b border-border bg-panel/90 backdrop-blur-sm">
       <div className="mx-auto flex w-full max-w-[90rem] flex-wrap items-center justify-between gap-4 px-4 py-3 sm:px-6">
-        <Link href="/" className="text-foreground no-underline">
-          <span className="block font-[family-name:var(--font-display)] text-xl font-medium sm:text-2xl">
-            State Affairs
-          </span>
-          <span className="block text-xs font-normal text-muted">Legislative calendars</span>
+        <Link href="/" className="flex flex-col items-start gap-1 text-foreground no-underline">
+          <img
+            src="/state-affairs-logo.png"
+            alt="State Affairs"
+            className="h-8 w-auto sm:h-10"
+          />
+          <span className="text-xs font-normal text-muted">Legislative calendars</span>
         </Link>
         <nav className="flex flex-wrap items-center gap-1 text-sm font-medium">
           {ALL_LINKS.map((link) => {

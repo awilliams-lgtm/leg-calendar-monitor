@@ -27,13 +27,14 @@ export async function refreshSaMeetings(states?: string[], opts?: { force?: bool
     return { ...publicSa(cache), skipped: true, reason: "no-session" as const };
   }
 
+  if (opts?.force) clearSaAdminWindowCache();
+
   const cache = await loadSaCache();
   const emptyFullPass = cache.scraped.length >= STATE_SOURCES.length && cache.events.length === 0;
-  const completed = cache.scraped.length >= STATE_SOURCES.length;
   if (opts?.force && !states?.length) {
     cache.scraped = [];
     await saveSaCache(cache);
-  } else if (!states?.length && (emptyFullPass || (completed && saCacheStale(cache)))) {
+  } else if (!states?.length && (emptyFullPass || saCacheStale(cache))) {
     cache.scraped = [];
     await saveSaCache(cache);
   }
@@ -54,10 +55,17 @@ export async function refreshSaMeetings(states?: string[], opts?: { force?: bool
 
   const window = upcomingWindow();
   try {
-    if (opts?.force) clearSaAdminWindowCache();
-    const byState = await fetchSaAdminWindow(window.from, window.to);
+    const byState = await fetchSaAdminWindow(window.from, window.to, remaining);
     for (const code of remaining) {
       await mergeSaUpcoming(code, byState.get(code) || [], window.from, window.to, { replaceEmpty: true });
+    }
+    try {
+      const { compareState } = await import("@/lib/data");
+      for (const code of remaining) {
+        await compareState(code);
+      }
+    } catch {
+      /* file cache is enough when the database is not configured */
     }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

@@ -5,7 +5,6 @@ import Link from "next/link";
 import { CalendarLegend } from "@/components/SaBadge";
 import { MonthGrid } from "@/components/MonthGrid";
 import { monthKey, parseMonth, shiftMonth } from "@/lib/dates";
-import { useAdmin } from "@/components/AdminGate";
 import type { StateMonthSummary } from "@/lib/types";
 
 type Overview = {
@@ -36,7 +35,6 @@ type Overview = {
 };
 
 export function CalendarsHome() {
-  const admin = useAdmin();
   const [month, setMonth] = useState(monthKey());
   const [q, setQ] = useState("");
   const [data, setData] = useState<Overview | null>(null);
@@ -53,25 +51,14 @@ export function CalendarsHome() {
 
     async function run() {
       try {
-        const first = await loadOverview();
-        if (admin === null) return;
-        const needsScrape =
-          (first.scraped || 0) < (first.total || 50) || Boolean(first.stale) || Boolean(first.scraping);
-        if (needsScrape) {
-          while (!stop) {
-            const ref = await fetch("/api/calendar/refresh").then((r) => r.json());
-            await loadOverview();
-            if (!ref.scraping) break;
+        let first = await loadOverview();
+        if (first.demo || first.scraping || first.saScraping) {
+          const deadline = Date.now() + 12 * 60 * 1000;
+          while (!stop && Date.now() < deadline) {
+            await new Promise((resolve) => setTimeout(resolve, 15000));
+            first = await loadOverview();
+            if (!first.demo && !first.scraping && !first.saScraping) break;
           }
-        }
-        while (!stop) {
-          const sa = await fetch("/api/sa/meetings", {
-            method: "POST",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify({ action: "refresh" }),
-          }).then((r) => r.json());
-          await loadOverview();
-          if (sa.skipped || sa.needsBrowserFetch || !sa.ok || !sa.scraping) break;
         }
       } catch {
         if (!stop) setData({ ok: false, error: "Could not load calendars" });
@@ -82,7 +69,7 @@ export function CalendarsHome() {
     return () => {
       stop = true;
     };
-  }, [month, admin]);
+  }, [month]);
 
   const { year, month: monthNum } = parseMonth(month);
   const filtered = useMemo(() => {
@@ -95,11 +82,13 @@ export function CalendarsHome() {
   const totals = useMemo(() => {
     let onSa = 0;
     let missing = 0;
+    let notRelevant = 0;
     for (const row of data?.states || []) {
       onSa += row.onSa;
       missing += row.missing;
+      notRelevant += row.notRelevant || 0;
     }
-    return { onSa, missing };
+    return { onSa, missing, notRelevant };
   }, [data]);
 
   const scrapedSet = useMemo(() => new Set(data?.scrapedCodes || []), [data]);
@@ -119,12 +108,17 @@ export function CalendarsHome() {
         <CalendarLegend />
       </div>
 
-      {data?.scraping && (
+      {data?.scraping ? (
         <p className="rounded-xl border border-border bg-panel px-4 py-3 text-sm">
           Pulling official calendars… {data.scraped || 0} / {data.total || 50} states
           {totals.missing + totals.onSa > 0 ? ` · ${totals.missing + totals.onSa} events so far` : ""}.
         </p>
-      )}
+      ) : data?.demo ? (
+        <p className="rounded-xl border border-border bg-panel px-4 py-3 text-sm">
+          Official calendars have not been stored yet. The server fills them every hour from 7am to
+          5pm Eastern, and will catch up now if this is the first pull.
+        </p>
+      ) : null}
       {data?.saNeedsBrowserFetch ? (
         <p className="rounded-xl border border-border bg-panel px-4 py-3 text-sm">
           State Affairs blocked the meeting pull after {data.saScraped || 0} / {data.total || 50}{" "}
@@ -170,7 +164,7 @@ export function CalendarsHome() {
           <p className="text-xs font-semibold uppercase tracking-wide text-muted">
             {data.label || month} — official vs State Affairs
           </p>
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
             <Stat
               label="Official this month"
               value={data.stats.officialThisMonth ?? totals.onSa + totals.missing}
@@ -190,6 +184,12 @@ export function CalendarsHome() {
               hint="Official meetings this month still unmatched and not marked as added"
               href={`/gaps?month=${month}`}
               tone="accent"
+            />
+            <Stat
+              label="Not relevant"
+              value={totals.notRelevant}
+              hint="Official meetings marked not relevant so they drop out of missing"
+              href={`/gaps?month=${month}&status=irrelevant`}
             />
             <Stat
               label="SA listed this month"
@@ -229,6 +229,7 @@ export function CalendarsHome() {
                       <div>{row.onSa + row.missing} official this month</div>
                       <div className="text-teal">{row.onSa} already on SA</div>
                       {row.missing > 0 && <div className="text-accent">{row.missing} missing from SA</div>}
+                      {(row.notRelevant || 0) > 0 && <div>{row.notRelevant} not relevant</div>}
                       <div>{row.saMeetings || 0} on SA’s calendar</div>
                     </>
                   ) : scrapedSet.has(row.code) ? (

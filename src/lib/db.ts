@@ -1,32 +1,63 @@
-import { neon, type NeonQueryFunction } from "@neondatabase/serverless";
+import postgres, { type Sql } from "postgres";
+import { envVar } from "@/lib/env";
 
-let sql: NeonQueryFunction<false, false> | null = null;
+let sql: Sql | null = null;
 let schemaReady = false;
 
 export function databaseUrl(): string | null {
-  const url =
-    process.env.DATABASE_URL ||
-    process.env.POSTGRES_URL ||
-    process.env.POSTGRES_PRISMA_URL ||
-    process.env.POSTGRES_URL_NON_POOLING;
-  return url?.trim() || null;
+  const candidates = [
+    process.env.DATABASE_URL,
+    process.env.POSTGRES_URL_NON_POOLING,
+    process.env.POSTGRES_URL,
+    process.env.POSTGRES_PRISMA_URL,
+  ];
+  for (const url of candidates) {
+    const trimmed = url?.trim() || "";
+    if (/^postgres(ql)?:\/\//i.test(trimmed)) return trimmed;
+  }
+  return null;
+}
+
+/** Hosted Vercel reads and writes calendars through Postgres, not the ephemeral /tmp file. */
+export function hostedDatabase(): boolean {
+  return Boolean(databaseUrl() && envVar("VERCEL"));
 }
 
 export function getSql() {
   const url = databaseUrl();
   if (!url) {
-    throw new Error(
-      "Missing DATABASE_URL. Add a Neon database in Vercel Storage and set DATABASE_URL.",
-    );
+    throw new Error("Missing DATABASE_URL. Set the Supabase Postgres URL in the server environment.");
   }
-  if (!sql) sql = neon(url);
+  // Supabase transaction pooler: no prepared statements, one connection per lambda.
+  if (!sql) {
+    sql = postgres(url, {
+      prepare: false,
+      max: 1,
+      idle_timeout: 20,
+      connect_timeout: 15,
+      ssl: "require",
+    });
+  }
   return sql;
 }
 
 export async function ensureSchema() {
   if (schemaReady) return;
   const q = getSql();
+  try {
+    await q`SELECT 1 FROM calendar_events LIMIT 1`;
+    schemaReady = true;
+    return;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (/must be owner/i.test(msg)) {
+      schemaReady = true;
+      return;
+    }
+    if (!/does not exist|relation/i.test(msg)) throw err;
+  }
 
+  try {
   await q`
     CREATE TABLE IF NOT EXISTS calendar_events (
       id BIGSERIAL PRIMARY KEY,
@@ -108,6 +139,10 @@ export async function ensureSchema() {
       value TEXT NOT NULL DEFAULT ''
     )
   `;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (!/must be owner/i.test(msg)) throw err;
+  }
 
   schemaReady = true;
 }

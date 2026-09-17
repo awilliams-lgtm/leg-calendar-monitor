@@ -1,3 +1,23 @@
+export const EASTERN_TZ = "America/New_York";
+
+/** Local hour 0–23 in Eastern time. */
+export function easternHour(now = new Date()): number {
+  const hour = new Intl.DateTimeFormat("en-US", {
+    timeZone: EASTERN_TZ,
+    hour: "2-digit",
+    hourCycle: "h23",
+  })
+    .formatToParts(now)
+    .find((part) => part.type === "hour")?.value;
+  return Number(hour);
+}
+
+/** Hourly scrapes run 7:00 through 17:00 America/New_York, including weekends. */
+export function isEasternScrapeHour(now = new Date()): boolean {
+  const hour = easternHour(now);
+  return hour >= 7 && hour <= 17;
+}
+
 export function monthKey(d = new Date()): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
 }

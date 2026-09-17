@@ -45,7 +45,7 @@ export function StateCalendar({ code, initialMonth }: { code: string; initialMon
     const ac = new AbortController();
     setData(null);
     setSelected("");
-    void fetch(`/api/calendar?state=${code}&month=${month}`, { signal: ac.signal })
+    void fetch(`/api/calendar?state=${code}&month=${month}`, { signal: ac.signal, cache: "no-store" })
       .then((r) => r.json())
       .then((json) => setData(json))
       .catch((err) => {
@@ -57,7 +57,7 @@ export function StateCalendar({ code, initialMonth }: { code: string; initialMon
   const { year, month: monthNum } = parseMonth(month);
 
   const filtered = useMemo(() => {
-    let items = data?.items || [];
+    let items = (data?.items || []).filter((ev) => !ev.irrelevant);
     if (chamber !== "all") {
       items = items.filter((ev) => (ev.chamber || "").toLowerCase() === chamber);
     }
@@ -287,7 +287,7 @@ function AgendaList({
                   )}
                 </div>
                 {!saSide && typeof ev.onSa === "boolean" && (
-                  <SaBadge onSa={ev.onSa} handled={ev.handled} />
+                  <SaBadge onSa={ev.onSa} handled={ev.handled && !ev.saMatchTitle} />
                 )}
               </div>
               {ev.location && <div className="mt-1 text-xs text-muted">{ev.location}</div>}

@@ -56,9 +56,10 @@ export function AnalyticsClient() {
 
   useEffect(() => {
     const ac = new AbortController();
+    const timer = window.setTimeout(() => ac.abort(), 25_000);
     setData(null);
     setError("");
-    void fetch(`/api/analytics?month=${encodeURIComponent(month)}`, { signal: ac.signal })
+    void fetch(`/api/analytics?month=${encodeURIComponent(month)}`, { signal: ac.signal, cache: "no-store" })
       .then((r) => r.json())
       .then((json) => {
         if (!json.ok) setError(json.error || "Could not load analytics");
@@ -66,8 +67,12 @@ export function AnalyticsClient() {
       })
       .catch((err) => {
         if (err.name !== "AbortError") setError("Could not load analytics");
+        else setError("Analytics timed out. Try a single month instead of all dates.");
       });
-    return () => ac.abort();
+    return () => {
+      window.clearTimeout(timer);
+      ac.abort();
+    };
   }, [month]);
 
   const names = useMemo(() => {

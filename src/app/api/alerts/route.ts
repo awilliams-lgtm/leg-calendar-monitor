@@ -10,7 +10,7 @@ export async function GET() {
     return NextResponse.json({ ok: true, notifications: [], unread: 0, fromCache: true });
   }
   const [notifications, unread] = await Promise.all([listNotifications(false), unreadCount()]);
-  return NextResponse.json({ ok: true, notifications, unread });
+  return NextResponse.json({ ok: true, notifications, unread }, { headers: { "Cache-Control": "no-store" } });
 }
 
 export async function POST() {

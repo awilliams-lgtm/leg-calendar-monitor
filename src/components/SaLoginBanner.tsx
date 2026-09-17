@@ -14,15 +14,22 @@ export function SaLoginBanner() {
   const [status, setStatus] = useState<Status | null>(null);
 
   useEffect(() => {
-    void fetch("/api/sa/meetings")
-      .then((r) => r.json())
-      .then(setStatus)
+    void Promise.all([
+      fetch("/api/sa/session").then((r) => r.json() as Promise<Status>),
+      fetch("/api/sa/meetings").then((r) => r.json() as Promise<Status>),
+    ])
+      .then(([session, meetings]) => {
+        setStatus({
+          connected: Boolean(session.connected || meetings.connected),
+          events: Number(meetings.events || 0),
+        });
+      })
       .catch(() => setStatus(null));
   }, []);
 
   if (!admin) return null;
   if (!status) return null;
-  if ((status.events || 0) > 0) return null;
+  if (status.connected || (status.events || 0) > 0) return null;
 
   return (
     <div className="border-b border-border bg-teal-soft">

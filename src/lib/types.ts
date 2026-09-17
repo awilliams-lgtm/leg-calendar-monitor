@@ -33,7 +33,7 @@ export type GapRow = {
   url: string;
   bills: string[];
   description?: string;
-  status: "open" | "dismissed" | "matched";
+  status: "open" | "dismissed" | "matched" | "irrelevant";
   score: number;
   createdAt: string;
   saMatchTitle: string;
@@ -75,6 +75,7 @@ export type CalendarItem = {
   description?: string;
   onSa: boolean;
   handled?: boolean;
+  irrelevant?: boolean;
   saMatchTitle: string;
 };
 
@@ -91,6 +92,7 @@ export type StateMonthSummary = {
   days: Record<string, DayCounts>;
   onSa: number;
   missing: number;
+  notRelevant: number;
   saMeetings: number;
 };
 

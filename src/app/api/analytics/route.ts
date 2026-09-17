@@ -4,6 +4,7 @@ import { monthKey } from "@/lib/dates";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+export const maxDuration = 20;
 
 export async function GET(req: NextRequest) {
   const raw = (req.nextUrl.searchParams.get("month") || monthKey()).trim();
