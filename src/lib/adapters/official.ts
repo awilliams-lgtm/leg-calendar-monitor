@@ -71,7 +71,8 @@ export async function fetchOfficialEvents(src: StateSource): Promise<{ events: C
     src.code === "US" ||
     src.code === "VA" ||
     src.code === "WI" ||
-    (["OR", "HI", "OH", "CO", "MO", "FL", "VT", "NM", "AK", "MS", "AR", "NH", "NY", "AZ", "OK", "UT", "CT", "ME", "LA", "SC", "NE", "MT", "DE", "TN", "PA"].includes(src.code) &&
+    src.code === "MO" ||
+    (["OR", "HI", "OH", "CO", "FL", "VT", "NM", "AK", "MS", "AR", "NH", "NY", "AZ", "OK", "UT", "CT", "ME", "LA", "SC", "NE", "MT", "DE", "TN", "PA"].includes(src.code) &&
       collected.length > 0) ||
     (src.code === "MA" && collected.length > 0) ||
     (["WA", "ND", "NJ", "AL", "WY"].includes(src.code) && collected.length > 0);

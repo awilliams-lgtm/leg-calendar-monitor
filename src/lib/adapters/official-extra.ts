@@ -273,7 +273,7 @@ export async function fetchOfficialApis(src: StateSource): Promise<{ events: Cal
     try {
       const rows = await fetchMoHearings();
       events.push(...rows);
-      notes.push(`MO hearings → ${rows.length}`);
+      notes.push(`MO house xml + senate → ${rows.length}`);
     } catch (err) {
       notes.push(`MO hearings failed: ${err instanceof Error ? err.message : String(err)}`);
     }
@@ -1478,6 +1478,8 @@ export async function fetchCoSchedule(): Promise<CalendarEvent[]> {
 
 const MO_HOUSE_HEARINGS = "https://house.mo.gov/HearingsTimeOrder.aspx";
 const MO_SENATE_HEARINGS = "https://www.senate.mo.gov/hearingsschedule/hrings.htm";
+const MO_SESSION_JS = "https://documents.house.mo.gov/SessionSet.js";
+const MO_XML_BASE = "https://documents.house.mo.gov/xml/";
 
 function clockTime(raw: string): string {
   return (raw || "")
@@ -1506,6 +1508,52 @@ function chamberFromTitle(title: string, fallback = ""): string {
 function parseMoHearings(html: string, pageUrl: string): CalendarEvent[] {
   const senate = /senate\.mo\.gov/i.test(pageUrl);
   return senate ? parseMoSenate(html, pageUrl) : parseMoHouse(html, pageUrl);
+}
+
+async function moHouseXmlUrl(): Promise<string> {
+  const js = await fetchText(MO_SESSION_JS, 12000);
+  const year = js.match(/var\s+sessionyearcode\s*=\s*'(\d+)'/)?.[1];
+  if (!year) throw new Error("MO sessionyearcode missing");
+  return `${MO_XML_BASE}${year}-UpcomingHearingList.XML`;
+}
+
+function parseMoHouseXml(xml: string, pageUrl: string): CalendarEvent[] {
+  if (!/<ROOT\b|<HearingInfo\b/i.test(xml)) throw new Error("MO house xml was not a hearing list");
+  const byId = new Map<string, CalendarEvent>();
+  const blocks = xml.split(/<HearingInfo>/i).slice(1);
+  for (const block of blocks) {
+    if (/<HearingStatus>\s*Cancel/i.test(block)) continue;
+    const title = cleanOfficialTitle(tag(block, "CommitteeName"));
+    const dateText = tag(block, "HearingDate");
+    const timeText = tag(block, "HearingTime");
+    const loc = tag(block, "HearingLocation");
+    const parsed = parseHumanDate(dateText) || parseLooseDate(dateText);
+    if (!parsed || !title || junkOfficialTitle(title)) continue;
+    const start = toIso(parsed.y, parsed.m, parsed.d, clockTime(timeText));
+    const hearingId = tag(block, "HearingID");
+    const id = hearingId ? `mo-h-${hearingId}` : hashId("MO", start, title);
+    if (byId.has(id)) continue;
+    const bills = [...block.matchAll(/<CurrentBillString>([\s\S]*?)<\/CurrentBillString>/gi)]
+      .map((m) => stripTags(m[1]).trim())
+      .filter(Boolean);
+    const comments = tag(block, "Comments");
+    const chairChamber = tag(block, "CommitteeChairChamber");
+    byId.set(
+      id,
+      ev({
+        sourceId: id,
+        state: "MO",
+        title,
+        start,
+        location: loc,
+        chamber: chamberFromTitle(title, /senate/i.test(chairChamber) ? "senate" : "house"),
+        url: pageUrl,
+        description: [comments, bills.join(", ")].filter(Boolean).join(" · "),
+        bills: bills.length ? bills : undefined,
+      }),
+    );
+  }
+  return [...byId.values()].filter(usable);
 }
 
 function parseMoHouse(html: string, pageUrl: string): CalendarEvent[] {
@@ -1572,13 +1620,31 @@ function parseMoSenate(html: string, pageUrl: string): CalendarEvent[] {
 
 export async function fetchMoHearings(): Promise<CalendarEvent[]> {
   const byId = new Map<string, CalendarEvent>();
-  for (const url of [MO_HOUSE_HEARINGS, MO_SENATE_HEARINGS]) {
+  const errors: string[] = [];
+  let loaded = 0;
+
+  try {
+    const xmlUrl = await moHouseXmlUrl();
+    for (const row of parseMoHouseXml(await fetchText(xmlUrl), MO_HOUSE_HEARINGS)) byId.set(row.sourceId, row);
+    loaded += 1;
+  } catch (err) {
+    errors.push(`house xml: ${err instanceof Error ? err.message : String(err)}`);
     try {
-      for (const row of parseMoHearings(await fetchText(url), url)) byId.set(row.sourceId, row);
-    } catch {
-      /* one chamber can fail */
+      for (const row of parseMoHouse(await fetchText(MO_HOUSE_HEARINGS), MO_HOUSE_HEARINGS)) byId.set(row.sourceId, row);
+      loaded += 1;
+    } catch (htmlErr) {
+      errors.push(`house html: ${htmlErr instanceof Error ? htmlErr.message : String(htmlErr)}`);
     }
   }
+
+  try {
+    for (const row of parseMoSenate(await fetchText(MO_SENATE_HEARINGS), MO_SENATE_HEARINGS)) byId.set(row.sourceId, row);
+    loaded += 1;
+  } catch (err) {
+    errors.push(`senate: ${err instanceof Error ? err.message : String(err)}`);
+  }
+
+  if (!loaded) throw new Error(errors.join("; ") || "MO hearings fetch failed");
   return [...byId.values()];
 }
 
