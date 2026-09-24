@@ -93,8 +93,30 @@ export function daysInRange(from: string, to: string): string[] {
   return out;
 }
 
-export function formatTime(start: string): string {
-  const t = start.slice(11, 16);
+/** Turn a timezone-aware ISO stamp into a naive wall-clock local datetime in `timeZone`. */
+export function wallClockInZone(iso: string, timeZone: string): string {
+  if (!iso) return iso;
+  if (!/[zZ]|[+-]\d{2}:\d{2}$/.test(iso)) return iso.length >= 19 ? iso.slice(0, 19) : iso;
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(d);
+  const g = (type: Intl.DateTimeFormatPartTypes) => parts.find((p) => p.type === type)?.value || "00";
+  return `${g("year")}-${g("month")}-${g("day")}T${g("hour")}:${g("minute")}:${g("second")}`;
+}
+
+export function formatTime(start: string, timeZone?: string): string {
+  const zone = timeZone || EASTERN_TZ;
+  const clock = /[zZ]|[+-]\d{2}:\d{2}$/.test(start) ? wallClockInZone(start, zone) : start;
+  const t = clock.slice(11, 16);
   if (!t || t === "00:00") return "";
   const [h, m] = t.split(":").map(Number);
   const ap = h >= 12 ? "PM" : "AM";

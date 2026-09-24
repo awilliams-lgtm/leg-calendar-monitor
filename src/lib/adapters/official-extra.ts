@@ -4047,32 +4047,34 @@ function parseMiMeetingsPage(html: string, pageUrl: string): CalendarEvent[] {
       }),
     );
   }
-  const cellRe =
-    /meetingID=(\d+)[\s\S]{0,500}?(?:>([HS])<|(?:>(House|Senate)\b))?[\s\S]{0,300}?<a[^>]+meetingID=\1[^>]*>([\s\S]*?)<\/a>[\s\S]{0,200}?(\d{1,2}:\d{2}\s*[AP]M)[\s\S]{0,120}?(cancelled)?/gi;
-  let m: RegExpExecArray | null;
-  while ((m = cellRe.exec(html))) {
-    if (m[6]) continue;
-    const title = cleanOfficialTitle(stripTags(m[4]));
-    if (!title || junkOfficialTitle(title) || /funds*(rep\.|sen\.)/i.test(title)) continue;
-    const around = html.slice(Math.max(0, m.index - 400), m.index + 200);
-    const parsed = parseHumanDate(around) || parseHumanDate(stripTags(around));
+  const parts = html.split(/<div[^>]*>\s*(\d{1,2}\/\d{1,2}\/\d{4})\s*<\/div>/i);
+  for (let i = 1; i + 1 < parts.length; i += 2) {
+    const parsed = parseHumanDate(parts[i]);
     if (!parsed) continue;
-    const chamberRaw = (m[2] || m[3] || "").toLowerCase();
-    const chamber = chamberRaw.startsWith("s") ? "senate" : chamberRaw.startsWith("h") ? "house" : "";
-    const start = toIso(parsed.y, parsed.m, parsed.d, m[5]);
-    const id = `mi-${m[1]}`;
-    if (byId.has(id)) continue;
-    byId.set(
-      id,
-      ev({
-        sourceId: id,
-        state: "MI",
-        title,
-        start,
-        chamber,
-        url: `https://www.legislature.mi.gov/Committees/Meeting?meetingID=${m[1]}`,
-      }),
-    );
+    const body = parts[i + 1] || "";
+    for (const m of body.matchAll(/Meeting\?meetingID=(\d+)">([\s\S]*?)<\/a>([\s\S]{0,160})/gi)) {
+      const tail = m[3] || "";
+      if (/cancelled/i.test(tail) || /class="struck"/i.test(tail)) continue;
+      const title = cleanOfficialTitle(stripTags(m[2]));
+      if (!title || junkOfficialTitle(title) || /funds*(rep\.|sen\.)/i.test(title)) continue;
+      const time = tail.match(/(\d{1,2}:\d{2}\s*[AP]M)/i)?.[1];
+      const before = body.slice(Math.max(0, (m.index || 0) - 220), m.index || 0);
+      const chamber = />S<\/span>/i.test(before) ? "senate" : />H<\/span>/i.test(before) ? "house" : "";
+      const start = toIso(parsed.y, parsed.m, parsed.d, time);
+      const id = `mi-${m[1]}`;
+      if (byId.has(id)) continue;
+      byId.set(
+        id,
+        ev({
+          sourceId: id,
+          state: "MI",
+          title,
+          start,
+          chamber,
+          url: `https://www.legislature.mi.gov/Committees/Meeting?meetingID=${m[1]}`,
+        }),
+      );
+    }
   }
   return [...byId.values()].filter(usable);
 }
@@ -4094,7 +4096,7 @@ export async function fetchMiMeetings(): Promise<CalendarEvent[]> {
   for (const url of MI_PAGES) {
     try {
       add(parseMiMeetingsPage(await fetchText(url, 20000), url));
-      if (byId.size) break;
+      if ([...byId.keys()].some((id) => /^mi-\d+$/.test(id))) break;
     } catch (err) {
       errors.push(`page ${err instanceof Error ? err.message : String(err)}`);
     }

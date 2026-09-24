@@ -5,7 +5,7 @@ import Link from "next/link";
 import { CalendarLegend, SaBadge } from "@/components/SaBadge";
 import { MonthGrid } from "@/components/MonthGrid";
 import { eventDay, formatTime, parseMonth, shiftMonth } from "@/lib/dates";
-import { chamberLabel } from "@/lib/states";
+import { chamberLabel, stateByCode } from "@/lib/states";
 import { MeetingExtras } from "@/components/MeetingExtras";
 import type { CalendarItem, DayCounts } from "@/lib/types";
 
@@ -276,7 +276,7 @@ function AgendaList({
               <div className="flex flex-wrap items-start justify-between gap-2">
                 <div className="min-w-0">
                   <div className="text-xs font-medium uppercase tracking-wide text-muted">
-                    {[formatTime(ev.start) || "Time TBA", chamberLabel(ev.chamber || "")].filter(Boolean).join(" · ")}
+                    {[formatTime(ev.start, stateByCode(ev.state)?.tz) || "Time TBA", chamberLabel(ev.chamber || "")].filter(Boolean).join(" · ")}
                   </div>
                   {ev.url ? (
                     <a href={ev.url} target="_blank" rel="noreferrer" className="mt-0.5 block font-medium no-underline hover:underline">

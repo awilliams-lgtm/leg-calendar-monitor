@@ -9,6 +9,7 @@ import {
   recordSyncRun,
 } from "@/lib/data";
 import { formatGapAlert, notifyEmail, notifySlack } from "@/lib/notify";
+import { wallClockInZone } from "@/lib/dates";
 import { STATE_SOURCES, stateByCode } from "@/lib/states";
 import type { CalendarEvent, SyncResult } from "@/lib/types";
 import { databaseUrl } from "@/lib/db";
@@ -55,7 +56,14 @@ export async function officialEventsFor(code: string): Promise<{ events: Calenda
   if (needOpenStates) {
     try {
       const os = await fetchOpenStatesEvents(src.openstates, afterIso());
-      collected.push(...os.map((e) => ({ ...e, state: code })));
+      collected.push(
+        ...os.map((e) => ({
+          ...e,
+          state: code,
+          start: wallClockInZone(e.start, src.tz),
+          end: e.end ? wallClockInZone(e.end, src.tz) : e.end,
+        })),
+      );
       notes.push(`${code} openstates → ${os.length}`);
     } catch (err) {
       notes.push(`${code} openstates failed: ${err instanceof Error ? err.message : String(err)}`);
