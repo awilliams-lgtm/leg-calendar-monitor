@@ -220,6 +220,7 @@ export function StateCalendar({ code, initialMonth }: { code: string; initialMon
                     : "No official events on this day."
                 }
                 items={dayItems}
+                timeZone={stateByCode(code)?.tz}
               />
               <AgendaList
                 heading="State Affairs meetings"
@@ -230,6 +231,7 @@ export function StateCalendar({ code, initialMonth }: { code: string; initialMon
                 }
                 items={saDayItems}
                 saSide
+                timeZone={stateByCode(code)?.tz}
               />
             </div>
           )}
@@ -258,11 +260,13 @@ function AgendaList({
   empty,
   items,
   saSide,
+  timeZone,
 }: {
   heading: string;
   empty: string;
   items: AgendaEvent[];
   saSide?: boolean;
+  timeZone?: string;
 }) {
   return (
     <div>
@@ -276,7 +280,7 @@ function AgendaList({
               <div className="flex flex-wrap items-start justify-between gap-2">
                 <div className="min-w-0">
                   <div className="text-xs font-medium uppercase tracking-wide text-muted">
-                    {[formatTime(ev.start, stateByCode(ev.state)?.tz) || "Time TBA", chamberLabel(ev.chamber || "")].filter(Boolean).join(" · ")}
+                    {[formatTime(ev.start, timeZone) || "Time TBA", chamberLabel(ev.chamber || "")].filter(Boolean).join(" · ")}
                   </div>
                   {ev.url ? (
                     <a href={ev.url} target="_blank" rel="noreferrer" className="mt-0.5 block font-medium no-underline hover:underline">
