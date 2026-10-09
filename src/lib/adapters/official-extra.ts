@@ -6,6 +6,7 @@ import { absUrl, decodeEntities, fetchJson, fetchText, fetchTextPost, mapPool, M
 import { mergeOfficialEvent } from "@/lib/official-merge";
 import { fetchPdfText } from "@/lib/pdf-text";
 import { upcomingWindow } from "@/lib/dates";
+import { officialSourceRaw } from "@/lib/event-raw";
 import { STATE_SOURCES, type StateSource } from "@/lib/states";
 import { cleanOfficialTitle, completeOfficialTitle, junkOfficialEvent, junkOfficialTitle, withChamberLabel } from "@/lib/title";
 import type { CalendarEvent } from "@/lib/types";
@@ -13,7 +14,8 @@ import type { CalendarEvent } from "@/lib/types";
 function ev(partial: Omit<CalendarEvent, "bills" | "state"> & { state: string; bills?: string[] }): CalendarEvent {
   const title = cleanOfficialTitle(completeOfficialTitle(partial.title, partial.location, partial.description));
   const bills = partial.bills?.length ? partial.bills : extractBills(`${title}\n${partial.description || ""}`);
-  return { ...partial, title, bills };
+  const next = { ...partial, title, bills };
+  return { ...next, raw: officialSourceRaw(next) };
 }
 
 function hashId(state: string, start: string, title: string): string {

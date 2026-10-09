@@ -675,6 +675,7 @@ export function ingestRowsToEvents(state: string, rows: Array<Record<string, unk
         chamber: String(row.chamber || ""),
         url: String(row.url || ""),
         bills: Array.isArray(row.bills) ? row.bills.map(String) : extractBills(String(row.title)),
+        raw: row.raw ?? row,
       });
       continue;
     }
