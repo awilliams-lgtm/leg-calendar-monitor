@@ -1,4 +1,5 @@
 import type { CalendarEvent } from "@/lib/types";
+import { officialSourceRaw } from "@/lib/event-raw";
 import { extractBills } from "@/lib/match";
 import { fetchText } from "@/lib/html";
 
@@ -37,7 +38,7 @@ export function parseIcsText(ics: string): CalendarEvent[] {
     const start = icsTimeToIso(field("DTSTART"));
     const title = (field("SUMMARY") || "Untitled event").replace(/\s+/g, " ").trim();
     if (!uid || !start) continue;
-    events.push({
+    const event = {
       sourceId: uid.slice(0, 180),
       state: "",
       title,
@@ -47,7 +48,8 @@ export function parseIcsText(ics: string): CalendarEvent[] {
       url: field("URL"),
       bills: extractBills(`${title}\n${field("DESCRIPTION")}`),
       description: field("DESCRIPTION"),
-    });
+    };
+    events.push({ ...event, raw: officialSourceRaw(event) });
   }
   return events;
 }

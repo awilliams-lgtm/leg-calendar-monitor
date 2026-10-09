@@ -14,13 +14,15 @@ import {
 import type { StateSource } from "@/lib/states";
 import { upcomingWindow } from "@/lib/dates";
 import { isHiddenMeeting } from "@/lib/hidden";
+import { officialSourceRaw } from "@/lib/event-raw";
 import { cleanOfficialTitle, junkOfficialTitle, withChamberLabel } from "@/lib/title";
 import type { CalendarEvent } from "@/lib/types";
 
 function ev(partial: Omit<CalendarEvent, "bills" | "state"> & { state: string; bills?: string[] }): CalendarEvent {
   const title = cleanOfficialTitle(partial.title);
   const bills = partial.bills?.length ? partial.bills : extractBills(`${title}\n${partial.description || ""}`);
-  return { ...partial, title, bills };
+  const next = { ...partial, title, bills };
+  return { ...next, raw: officialSourceRaw(next) };
 }
 
 function hashId(state: string, start: string, title: string): string {
@@ -318,6 +320,7 @@ async function fetchMaHearingsApi(): Promise<CalendarEvent[]> {
         chamber: /senate/i.test(committee) ? "senate" : /house/i.test(committee) ? "house" : "joint",
         url: `https://malegislature.gov/Events/Hearings/Detail/${row.EventId}`,
         description: subject && subject !== title ? subject : "",
+        raw: row,
       }),
     );
   }
@@ -353,6 +356,7 @@ async function fetchMaSessionsApi(): Promise<CalendarEvent[]> {
         location: row.LocationName || "",
         chamber: /senate/i.test(title) ? "senate" : /house/i.test(title) ? "house" : "joint",
         url: `https://malegislature.gov/Events/Sessions/Detail/${row.EventId}`,
+        raw: row,
       }),
     );
   }

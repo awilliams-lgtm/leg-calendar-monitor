@@ -3,6 +3,7 @@ import { MATCH_THRESHOLD, bestMatch, eventDateKey, extractBills } from "@/lib/ma
 import { filterUnconfirmed, findReviewMatch, type ReviewConfirmation } from "@/lib/review";
 import { STATE_SOURCES } from "@/lib/states";
 import { officialHandledKey, inMonth, summarizeState, toCalendarItems } from "@/lib/calendar";
+import { parseEventRaw, serializeEventRaw } from "@/lib/event-raw";
 import { isClosedFacilityNotice, junkOfficialEvent, usableOfficialEvents, usableSaEvents } from "@/lib/title";
 import type {
   CalendarEvent,
@@ -43,7 +44,7 @@ export async function upsertEvents(
   let upserted = 0;
   for (const ev of events) {
     const bills = JSON.stringify(ev.bills || []);
-    const raw = JSON.stringify(ev.raw ?? {});
+    const raw = serializeEventRaw(ev.raw);
     const rows = (await q`
       INSERT INTO calendar_events (
         source, source_id, state, title, start_at, end_at, all_day,
@@ -63,7 +64,12 @@ export async function upsertEvents(
         url = EXCLUDED.url,
         bills = EXCLUDED.bills,
         description = EXCLUDED.description,
-        raw = EXCLUDED.raw,
+        raw = CASE
+          WHEN EXCLUDED.raw IS NULL OR btrim(EXCLUDED.raw) IN ('', '{}', '[]', 'null', '""') THEN calendar_events.raw
+          WHEN calendar_events.raw IS NULL OR btrim(calendar_events.raw) IN ('', '{}', '[]', 'null', '""') THEN EXCLUDED.raw
+          WHEN length(EXCLUDED.raw) >= length(calendar_events.raw) THEN EXCLUDED.raw
+          ELSE calendar_events.raw
+        END,
         last_seen_at = NOW()
       RETURNING source_id, (xmax = 0) AS inserted
     `) as Array<{ source_id: string; inserted: boolean }>;
@@ -123,7 +129,7 @@ export async function allEventsForSource(source: "official" | "sa"): Promise<Cal
   await ensureSchema();
   const q = getSql();
   const rows = (await q`
-    SELECT source_id, state, title, start_at, location, chamber, url, bills, description
+    SELECT source_id, state, title, start_at, location, chamber, url, bills, description, raw
     FROM calendar_events
     WHERE source = ${source}
     ORDER BY start_at ASC
@@ -137,6 +143,7 @@ export async function allEventsForSource(source: "official" | "sa"): Promise<Cal
     url: string;
     bills: string;
     description: string;
+    raw: string;
   }>;
   return rows.map((r) => ({
     sourceId: r.source_id,
@@ -148,6 +155,7 @@ export async function allEventsForSource(source: "official" | "sa"): Promise<Cal
     url: r.url,
     bills: parseBills(r.bills),
     description: r.description || "",
+    raw: parseEventRaw(r.raw),
   }));
 }
 
@@ -155,7 +163,7 @@ export async function eventsForState(source: "official" | "sa", state: string) {
   await ensureSchema();
   const q = getSql();
   const rows = (await q`
-    SELECT source_id, title, start_at, location, chamber, url, bills, description
+    SELECT source_id, title, start_at, location, chamber, url, bills, description, raw
     FROM calendar_events
     WHERE source = ${source} AND state = ${state}
     ORDER BY start_at ASC
@@ -168,6 +176,7 @@ export async function eventsForState(source: "official" | "sa", state: string) {
     url: string;
     bills: string;
     description: string;
+    raw: string;
   }>;
   return rows.map((r) => ({
     sourceId: r.source_id,
@@ -179,6 +188,7 @@ export async function eventsForState(source: "official" | "sa", state: string) {
     url: r.url,
     bills: parseBills(r.bills),
     description: r.description || "",
+    raw: parseEventRaw(r.raw),
   }));
 }
 

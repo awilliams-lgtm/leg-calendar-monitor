@@ -4,12 +4,14 @@ import { absUrl, fetchText, mapPool, parseHumanDate, stripTags, toIso } from "@/
 import { isHiddenMeeting } from "@/lib/hidden";
 import { cleanOfficialTitle, junkOfficialTitle } from "@/lib/title";
 import { upcomingWindow } from "@/lib/dates";
+import { officialSourceRaw } from "@/lib/event-raw";
 import type { CalendarEvent } from "@/lib/types";
 
 function ev(partial: Omit<CalendarEvent, "bills" | "state"> & { state: string; bills?: string[] }): CalendarEvent {
   const title = cleanOfficialTitle(partial.title);
   const bills = partial.bills?.length ? partial.bills : extractBills(`${title}\n${partial.description || ""}`);
-  return { ...partial, title, bills };
+  const next = { ...partial, title, bills };
+  return { ...next, raw: officialSourceRaw(next) };
 }
 
 function hashId(start: string, title: string): string {
