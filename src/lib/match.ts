@@ -51,6 +51,7 @@ const ABBR: Record<string, string[]> = {
   jud: ["judiciary"],
   appr: ["appropriations"],
   approps: ["appropriations"],
+  ai: ["artificial", "intelligence"],
 };
 
 export function extractBills(text: string): string[] {
@@ -107,6 +108,12 @@ function forMatch(text: string): string {
     .replace(/\band any other business\b.*$/gi, " ")
     .replace(/,\s*(rep\.|sen\.|representative|senator|chairman|chairperson)\b.*$/gi, " ")
     .replace(/\bpart\s+\d+\b/gi, " ")
+    .replace(/&/g, " and ")
+    .replace(/^(house|senate|assembly|joint)\s+\1\b/gi, "$1")
+    .replace(/^\s*20\d{2}\s+/g, " ")
+    .replace(/\(\s*legislative council\s*\)/gi, " ")
+    .replace(/\binterim joint (?:committee|subcommittee) on\b/gi, " ")
+    .replace(/\bstudy (?:committee|meeting)\b/gi, " ")
     .replace(new RegExp(`\\b(?:${MONTHS})\\.?\\s+\\d{1,2}(?:st|nd|rd|th)?(?:,?\\s+\\d{4})?\\b`, "gi"), " ")
     .replace(/\b\d{1,2}\/\d{1,2}\/\d{2,4}\b/g, " ")
     .replace(/\b20\d{2}\b/g, " ")
@@ -127,12 +134,18 @@ function tokens(text: string): Set<string> {
   return out;
 }
 
-function matchPhrase(text: string): string {
+export function matchPhrase(text: string): string {
   return forMatch(text)
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, " ")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+export function titlesEqual(a: string, b: string): boolean {
+  const left = matchPhrase(a);
+  const right = matchPhrase(b);
+  return Boolean(left && left === right);
 }
 
 function phraseContains(officialTitle: string, saTitle: string): boolean {
@@ -153,6 +166,9 @@ function dice(a: Set<string>, b: Set<string>): number {
 }
 
 function titleScore(officialTitle: string, saTitle: string): number {
+  const officialPhrase = matchPhrase(officialTitle);
+  const saPhrase = matchPhrase(saTitle);
+  if (officialPhrase && officialPhrase === saPhrase) return 1;
   const a = tokens(officialTitle);
   const b = tokens(saTitle);
   let score = dice(a, b);

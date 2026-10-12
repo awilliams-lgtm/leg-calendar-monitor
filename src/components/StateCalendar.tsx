@@ -7,6 +7,7 @@ import { MonthGrid } from "@/components/MonthGrid";
 import { eventDay, formatTime, parseMonth, shiftMonth } from "@/lib/dates";
 import { chamberLabel, stateByCode } from "@/lib/states";
 import { MeetingExtras } from "@/components/MeetingExtras";
+import { titlesEqual } from "@/lib/match";
 import type { CalendarItem, DayCounts } from "@/lib/types";
 
 type Feed = { chamber: string; label: string; url: string };
@@ -295,7 +296,7 @@ function AgendaList({
                 )}
               </div>
               {ev.location && <div className="mt-1 text-xs text-muted">{ev.location}</div>}
-              {ev.onSa && ev.saMatchTitle && ev.saMatchTitle !== ev.title && (
+              {ev.onSa && ev.saMatchTitle && !titlesEqual(ev.saMatchTitle, ev.title) && (
                 <div className="mt-1 text-[11px] text-teal">Matched: {ev.saMatchTitle}</div>
               )}
               {!saSide && ev.onSa === false && (

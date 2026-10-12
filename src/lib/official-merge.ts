@@ -1,6 +1,6 @@
 import { isEmptyRaw } from "@/lib/event-raw";
 import { MATCH_THRESHOLD, bestMatchEvent, extractBills } from "@/lib/match";
-import { completeOfficialTitle, isGenericCommitteeLabel, junkOfficialEvent } from "@/lib/title";
+import { cleanOfficialTitle, completeOfficialTitle, isGenericCommitteeLabel, junkOfficialEvent } from "@/lib/title";
 import type { CalendarEvent } from "@/lib/types";
 
 function richerText(incoming?: string, existing?: string): string {
@@ -12,7 +12,7 @@ function richerText(incoming?: string, existing?: string): string {
 }
 
 function withoutStandingCategory(title: string): string {
-  return title
+  return cleanOfficialTitle(title)
     .replace(/\s+standing\s+committee\s*$/i, " Committee")
     .replace(/\s+/g, " ")
     .trim()
@@ -24,8 +24,8 @@ function officialSlotKey(ev: CalendarEvent): string {
 }
 
 function pickOfficialTitle(incoming?: string, existing?: string): string {
-  const next = String(incoming || "").trim();
-  const prev = String(existing || "").trim();
+  const next = cleanOfficialTitle(String(incoming || "").trim());
+  const prev = cleanOfficialTitle(String(existing || "").trim());
   if (!next) return prev;
   if (!prev) return next;
   if (isGenericCommitteeLabel(prev) && !isGenericCommitteeLabel(next)) return next;
