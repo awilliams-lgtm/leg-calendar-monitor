@@ -113,7 +113,10 @@ export async function syncState(code: string): Promise<SyncResult> {
     const cache = await loadOfficialCache();
     const existing = cache.events.filter((e) => e.state === state);
     const failed = (pulled.notes || []).some((note) => /\bfailed\b/i.test(note));
-    if (failed && official.length === 0 && existing.length > 0) {
+    const confirmedRead = (pulled.notes || []).some(
+      (note) => /→\s*\d+/.test(note) && !/\bfailed\b/i.test(note),
+    );
+    if (failed && official.length === 0 && existing.length > 0 && !confirmedRead) {
       result.error = `Kept ${existing.length} last-good official meetings; scrape returned 0.`;
       await recordSyncRun(state, "official", 0, result.error);
     } else {

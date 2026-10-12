@@ -3,7 +3,7 @@ import { MATCH_THRESHOLD, bestMatch, eventDateKey, extractBills } from "@/lib/ma
 import { filterUnconfirmed, findReviewMatch, type ReviewConfirmation } from "@/lib/review";
 import { STATE_SOURCES } from "@/lib/states";
 import { officialHandledKey, inMonth, summarizeState, toCalendarItems } from "@/lib/calendar";
-import { parseEventRaw, serializeEventRaw } from "@/lib/event-raw";
+import { isEmptyRaw, officialSourceRaw, parseEventRaw, serializeEventRaw } from "@/lib/event-raw";
 import { isClosedFacilityNotice, junkOfficialEvent, usableOfficialEvents, usableSaEvents } from "@/lib/title";
 import type {
   CalendarEvent,
@@ -44,7 +44,7 @@ export async function upsertEvents(
   let upserted = 0;
   for (const ev of events) {
     const bills = JSON.stringify(ev.bills || []);
-    const raw = serializeEventRaw(ev.raw);
+    const raw = serializeEventRaw(isEmptyRaw(ev.raw) ? officialSourceRaw(ev) : ev.raw);
     const rows = (await q`
       INSERT INTO calendar_events (
         source, source_id, state, title, start_at, end_at, all_day,
@@ -77,6 +77,28 @@ export async function upsertEvents(
     if (rows[0]?.inserted) newIds.push(ev.sourceId);
   }
   return { upserted, newIds };
+}
+
+export async function backfillEmptyOfficialRaw(): Promise<number> {
+  await ensureSchema();
+  const q = getSql();
+  const rows = (await q`
+    UPDATE calendar_events
+    SET raw = json_build_object(
+      'sourceId', source_id,
+      'title', title,
+      'start', start_at,
+      'end', end_at,
+      'location', location,
+      'chamber', chamber,
+      'url', url,
+      'description', description
+    )::text
+    WHERE source = 'official'
+      AND (raw IS NULL OR btrim(raw) IN ('', '{}', '[]', 'null', '""'))
+    RETURNING source_id
+  `) as Array<{ source_id: string }>;
+  return rows.length;
 }
 
 export async function replaceOfficialEvents(
