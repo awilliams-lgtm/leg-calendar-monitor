@@ -1,7 +1,7 @@
 import type { CalendarEvent } from "@/lib/types";
 import { envVar } from "@/lib/env";
 import { extractBills } from "@/lib/match";
-import { completeOfficialTitle } from "@/lib/title";
+import { cleanOfficialTitle, completeOfficialTitle } from "@/lib/title";
 
 type OpenStatesEvent = {
   id?: string;
@@ -84,7 +84,9 @@ export async function fetchOpenStatesEvents(jurisdiction: string, afterIso: stri
       events.push({
         sourceId: row.id,
         state: "",
-        title: completeOfficialTitle(row.name || "Untitled event", locationName(row.location), row.description || ""),
+        title: cleanOfficialTitle(
+          completeOfficialTitle(row.name || "Untitled event", locationName(row.location), row.description || ""),
+        ),
         start: row.start_date,
         end: row.end_date,
         allDay: Boolean(row.all_day),

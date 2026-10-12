@@ -6,12 +6,22 @@ const CHROME =
 
 const SMALL = new Set(["and", "or", "of", "the", "to", "in", "on", "for", "a", "an", "at", "by"]);
 
+/** Drop doubled chamber prefixes from Open States, e.g. "House House Executive". */
+export function tidyOfficialTitle(title: string): string {
+  return String(title || "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/^(House|Senate|Assembly|Joint)\s+\1\b/i, "$1")
+    .trim();
+}
+
 export function cleanOfficialTitle(raw: string): string {
   let t = decodeEntities(String(raw || ""));
   t = t.replace(/<[^>]+>/g, " ");
   t = t.replace(CHROME, " ");
   t = t.replace(/\s+/g, " ").trim();
   t = t.replace(/^[-–—:|,.\s]+|[-–—:|,.\s]+$/g, "");
+  t = tidyOfficialTitle(t);
   if (isMostlyCaps(t)) t = titleCaseName(t);
   else t = softenSmallWords(t);
   return t.slice(0, 180).trim();
@@ -136,7 +146,7 @@ export function junkOfficialTitle(title: string): boolean {
  * Rejoin those so "House Agriculture and" matches the full SA title.
  */
 export function completeOfficialTitle(title: string, location = "", description = ""): string {
-  const t = String(title || "").replace(/\s+/g, " ").trim();
+  const t = tidyOfficialTitle(title);
   if (!/\band(?:\s+the)?$/i.test(t)) return t;
   const extra = `${location || ""}\n${description || ""}`
     .split(/\n/)
@@ -193,7 +203,7 @@ export function usableOfficialEvents<T extends {
 }>(events: T[]): T[] {
   return (events || [])
     .map((e) => {
-      const title = completeOfficialTitle(e.title, e.location, e.description);
+      const title = cleanOfficialTitle(completeOfficialTitle(e.title, e.location, e.description));
       return title === e.title ? e : { ...e, title };
     })
     .filter((e) => !junkOfficialEvent(e));
