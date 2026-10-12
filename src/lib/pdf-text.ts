@@ -1,5 +1,6 @@
 import { execFile } from "child_process";
 import { promisify } from "util";
+import { inflateRawSync, inflateSync } from "zlib";
 import { mkdtemp, rm, writeFile } from "fs/promises";
 import os from "os";
 import path from "path";
@@ -10,6 +11,29 @@ const UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
 
 const EXTRACT = path.join(process.cwd(), "scripts", "extract-pdf.py");
+
+/** Enough to read simple legislature PDFs on Vercel without Python. */
+export function extractPdfVisibleText(buf: Buffer): string {
+  const latin = buf.toString("latin1");
+  const bits: string[] = [];
+  const re = /FlateDecode[\s\S]{0,200}stream\r?\n([\s\S]*?)endstream/g;
+  let match: RegExpExecArray | null;
+  while ((match = re.exec(latin))) {
+    const data = Buffer.from(match[1], "latin1");
+    for (const fn of [inflateSync, inflateRawSync]) {
+      try {
+        bits.push(fn(data).toString("utf8"));
+        break;
+      } catch {
+        /* try the other inflater */
+      }
+    }
+  }
+  const inflated = bits.join("\n");
+  return [...inflated.matchAll(/\((?:\\.|[^\\)])*\)/g)]
+    .map((m) => m[0].slice(1, -1).replace(/\\n/g, "\n").replace(/\\(.)/g, "$1"))
+    .join(" ");
+}
 
 async function runPython(filePath: string): Promise<string> {
   const bins = process.platform === "win32" ? ["python", "py"] : ["python3", "python"];

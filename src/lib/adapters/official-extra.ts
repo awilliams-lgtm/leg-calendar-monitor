@@ -4,7 +4,7 @@ import { fetchCongressMeetings } from "@/lib/adapters/official-congress";
 import { extractBills } from "@/lib/match";
 import { absUrl, decodeEntities, fetchJson, fetchText, fetchTextPost, mapPool, MONTHS, parseHumanDate, stripTags, toIso } from "@/lib/html";
 import { mergeOfficialEvent } from "@/lib/official-merge";
-import { fetchPdfText } from "@/lib/pdf-text";
+import { extractPdfVisibleText, fetchPdfText } from "@/lib/pdf-text";
 import { upcomingWindow } from "@/lib/dates";
 import { officialSourceRaw } from "@/lib/event-raw";
 import { STATE_SOURCES, type StateSource } from "@/lib/states";
@@ -2685,18 +2685,26 @@ function parseMsPre(html: string, pageUrl: string): CalendarEvent[] {
 export async function fetchMsSchedule(): Promise<CalendarEvent[]> {
   const byId = new Map<string, CalendarEvent>();
   const errors: string[] = [];
-  for (const url of [
+  let sawSchedule = false;
+  const urls = [
     "https://billstatus.ls.state.ms.us/htms/h_sched.htm",
     "https://billstatus.ls.state.ms.us/htms/s_sched.htm",
-  ]) {
+    "http://billstatus.ls.state.ms.us/htms/h_sched.htm",
+    "http://billstatus.ls.state.ms.us/htms/s_sched.htm",
+  ];
+  for (const url of urls) {
     try {
-      for (const row of parseMs(await fetchText(url, 20000), url)) byId.set(row.sourceId, row);
+      const html = await fetchText(url, 25000, { Referer: "https://www.legislature.ms.gov/" });
+      if (/printed as of|committee schedule/i.test(html)) sawSchedule = true;
+      for (const row of parseMs(html, url)) byId.set(row.sourceId, row);
     } catch (err) {
       errors.push(`${url}: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
-  if (!byId.size && errors.length) throw new Error(errors.join("; "));
-  return [...byId.values()];
+  if (byId.size) return [...byId.values()];
+  if (sawSchedule) return [];
+  if (errors.length) throw new Error(errors.join("; "));
+  return [];
 }
 
 function isoDay(d: Date): string {
@@ -4902,6 +4910,68 @@ function parseDeJson(raw: string, pageUrl: string): CalendarEvent[] {
   return deRows(data.Data || [], pageUrl);
 }
 
+const DE_MEETINGS = "https://legis.delaware.gov/Meetings";
+const DE_JSON = "https://legis.delaware.gov/json/CommitteeMeetings/GetUpcomingCommitteeMeetings";
+const DE_PDF = "https://legis.delaware.gov/json/CommitteeMeetingsController/GenerateCommitteeSummaryPdf";
+
+function parseDeJsonBody(raw: string): CalendarEvent[] | null {
+  const text = raw.trim();
+  if (!text || (text[0] !== "{" && text[0] !== "[")) return null;
+  try {
+    const data = JSON.parse(text) as { Data?: DeMeeting[]; Errors?: unknown };
+    if (Array.isArray(data.Errors) ? data.Errors.length : data.Errors) return null;
+    return deRows(data.Data || [], DE_MEETINGS);
+  } catch {
+    return null;
+  }
+}
+
+function parseDeSummaryPdf(text: string, pageUrl: string): CalendarEvent[] {
+  const events: CalendarEvent[] = [];
+  for (const line of text.split(/\n+/).map((row) => row.replace(/\s+/g, " ").trim()).filter(Boolean)) {
+    if (/general assembly|upcoming committee meeting information|committee name|committee chair/i.test(line)) continue;
+    const parsed = parseLooseDate(line);
+    if (!parsed) continue;
+    const time = clockTime(line.match(/\d{1,2}:\d{2}\s*[AP]M/i)?.[0] || "");
+    const dateAt = line.search(
+      /\b(?:January|February|March|April|May|June|July|August|September|October|November|December|\d{1,2}\/\d{1,2})\b/i,
+    );
+    const title = cleanOfficialTitle(dateAt > 0 ? line.slice(0, dateAt) : line);
+    if (!title || junkOfficialTitle(title)) continue;
+    const chamber = /\bsenate\b/i.test(line) ? "senate" : /\bhouse\b/i.test(line) ? "house" : "joint";
+    const start = toIso(parsed.y, parsed.m, parsed.d, time);
+    events.push(
+      ev({
+        sourceId: hashId("DE", start, title),
+        state: "DE",
+        title,
+        start,
+        chamber,
+        url: pageUrl,
+      }),
+    );
+  }
+  return events.filter(usable);
+}
+
+function dePdfConfirmsEmpty(text: string): boolean {
+  const body = text
+    .replace(/153rd GENERAL ASSEMBLY|Upcoming Committee Meeting Information|Committee Name|Committee Chair|Meeting Date\/Time|Location\/Meeting Room/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return body.length < 12;
+}
+
+function dePdfBufferConfirmsEmpty(buf: Buffer): boolean {
+  const text = extractPdfVisibleText(buf);
+  const compact = text.replace(/\s+/g, "");
+  if (!/UpcomingCommitteeMeetingInformation/i.test(compact)) return false;
+  if (/\b\d{1,2}\/\d{1,2}\/\d{2,4}\b/.test(text)) return false;
+  return !/\b(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2}\b/i.test(
+    text,
+  );
+}
+
 function deRows(rows: DeMeeting[], pageUrl: string): CalendarEvent[] {
   const events: CalendarEvent[] = [];
   for (const row of rows) {
@@ -4934,15 +5004,49 @@ function deRows(rows: DeMeeting[], pageUrl: string): CalendarEvent[] {
 }
 
 async function fetchDeMeetings(): Promise<CalendarEvent[]> {
-  const url = "https://legis.delaware.gov/json/CommitteeMeetings/GetUpcomingCommitteeMeetings";
-  const raw = await fetchTextPost(url, "page=1&pageSize=200&take=200&skip=0", 18000, {
-    Referer: "https://legis.delaware.gov/Meetings",
-  });
-  const data = JSON.parse(raw) as { Data?: DeMeeting[]; Errors?: unknown };
-  if (Array.isArray(data.Errors) ? data.Errors.length : data.Errors) {
-    throw new Error("Delaware meetings JSON returned errors");
+  try {
+    const raw = await fetchTextPost(DE_JSON, "sort=&group=&filter=&page=1&pageSize=200&take=200&skip=0", 18000, {
+      Referer: DE_MEETINGS,
+      Origin: "https://legis.delaware.gov",
+      Accept: "application/json, text/javascript, */*; q=0.01",
+    });
+    const parsed = parseDeJsonBody(raw);
+    if (parsed) return parsed;
+  } catch {
+    /* WAF often returns an empty HTML body for this POST; fall through. */
   }
-  return deRows(data.Data || [], "https://legis.delaware.gov/Meetings");
+
+  try {
+    const text = await fetchPdfText(DE_PDF, 25000);
+    const rows = parseDeSummaryPdf(text, DE_PDF);
+    if (rows.length) return rows;
+    if (dePdfConfirmsEmpty(text)) return [];
+  } catch {
+    /* Python extract is not always available on Vercel. */
+  }
+
+  try {
+    const res = await fetch(DE_PDF, {
+      cache: "no-store",
+      redirect: "follow",
+      signal: AbortSignal.timeout(25000),
+      headers: {
+        "User-Agent":
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        Accept: "application/pdf,*/*",
+      },
+    });
+    if (res.ok) {
+      const buf = Buffer.from(await res.arrayBuffer());
+      if (dePdfBufferConfirmsEmpty(buf)) return [];
+    }
+  } catch {
+    /* last resort below */
+  }
+
+  const html = await fetchText(DE_MEETINGS, 20000);
+  if (!html.trim()) throw new Error("Delaware meetings page was empty");
+  throw new Error("Delaware meetings JSON/PDF did not return a parseable calendar");
 }
 
 function parseTn(html: string, pageUrl: string): CalendarEvent[] {

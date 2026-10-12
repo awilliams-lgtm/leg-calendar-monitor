@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { fetchSaProfile, saConfigured } from "@/lib/adapters/state-affairs";
 import { assertCron } from "@/lib/auth";
-import { getMeta, setMeta } from "@/lib/data";
+import { backfillEmptyOfficialRaw, getMeta, setMeta } from "@/lib/data";
 import { isEasternScrapeHour } from "@/lib/dates";
 import { loadOfficialCache } from "@/lib/official-cache";
 import { refreshSaMeetings } from "@/lib/sa-refresh";
@@ -67,6 +67,13 @@ export async function GET(req: NextRequest) {
     sa = { error: err instanceof Error ? err.message : String(err) };
   }
 
+  let rawBackfill = 0;
+  try {
+    rawBackfill = await backfillEmptyOfficialRaw();
+  } catch {
+    /* scrape results still stand */
+  }
+
   return NextResponse.json({
     ok: true,
     batch: codes,
@@ -74,5 +81,6 @@ export async function GET(req: NextRequest) {
     totalStates: STATE_SOURCES.length,
     results,
     sa,
+    rawBackfill,
   });
 }

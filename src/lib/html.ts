@@ -1,7 +1,14 @@
 import { execFile } from "child_process";
+import dns from "dns";
 import http from "http";
 import https from "https";
 import { promisify } from "util";
+
+try {
+  dns.setDefaultResultOrder("ipv4first");
+} catch {
+  /* Node always supports this on current runtimes */
+}
 
 const execFileAsync = promisify(execFile);
 
@@ -21,6 +28,11 @@ function browserHeaders(url: string, accept: string): Record<string, string> {
     "Accept-Language": "en-US,en;q=0.9",
     ...(origin ? { Referer: `${origin}/` } : {}),
   };
+}
+
+/** Public legislature hosts whose IIS chain Node cannot verify. */
+function tlsInsecureHost(hostname: string): boolean {
+  return /(^|\.)ls\.state\.ms\.us$/i.test(hostname);
 }
 
 function looksBlocked(body: string): boolean {
@@ -47,13 +59,14 @@ async function fetchViaCurl(
     headerArgs.push("-H", `${k}: ${v}`);
   }
   const postArgs = postBody ? ["-X", "POST", "--data", postBody] : [];
-  const bins = process.platform === "win32" ? ["curl.exe", "curl"] : ["curl", "curl.exe"];
+  const bins = process.platform === "win32" ? ["curl.exe", "curl"] : ["curl"];
+  const insecure = tlsInsecureHost(new URL(url).hostname) ? ["-k"] : [];
   let lastErr: unknown;
   for (const bin of bins) {
     try {
       const { stdout } = await execFileAsync(
         bin,
-        ["-sL", "--compressed", "--max-time", timeoutSec, "-A", UA, ...headerArgs, ...postArgs, "-w", "\n__STATUS__:%{http_code}", url],
+        ["-sL", "--compressed", "--max-time", timeoutSec, "-A", UA, ...insecure, ...headerArgs, ...postArgs, "-w", "\n__STATUS__:%{http_code}", url],
         { maxBuffer: 12 * 1024 * 1024, windowsHide: true },
       );
       const marker = stdout.lastIndexOf("\n__STATUS__:");
@@ -102,6 +115,8 @@ function fetchViaNodeHttp(
         method: postBody ? "POST" : "GET",
         headers,
         timeout: timeoutMs,
+        family: 4,
+        ...(tlsInsecureHost(parsed.hostname) ? { rejectUnauthorized: false } : {}),
       },
       (res) => {
         const status = res.statusCode || 0;
@@ -139,40 +154,48 @@ async function fetchWithFallbacks(
   extraHeaders?: Record<string, string>,
   postBody?: string,
 ): Promise<string> {
-  let lastErr: unknown;
+  const errors: string[] = [];
   let blockedBody = "";
+  let parsedHost = "";
   try {
-    const res = await fetch(url, {
-      method: postBody ? "POST" : "GET",
-      cache: "no-store",
-      redirect: "follow",
-      signal: AbortSignal.timeout(timeoutMs),
-      headers: { ...browserHeaders(url, accept), ...extraHeaders },
-      body: postBody,
-    });
-    if (!res.ok) throw new Error(`HTTP ${res.status} for ${url}`);
-    const body = await res.text();
-    if (!looksBlocked(body)) return body;
-    blockedBody = body;
-  } catch (err) {
-    lastErr = err;
+    parsedHost = new URL(url).hostname;
+  } catch {
+    parsedHost = "";
+  }
+  if (!tlsInsecureHost(parsedHost)) {
+    try {
+      const res = await fetch(url, {
+        method: postBody ? "POST" : "GET",
+        cache: "no-store",
+        redirect: "follow",
+        signal: AbortSignal.timeout(timeoutMs),
+        headers: { ...browserHeaders(url, accept), ...extraHeaders },
+        body: postBody,
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status} for ${url}`);
+      const body = await res.text();
+      if (!looksBlocked(body)) return body;
+      blockedBody = body;
+    } catch (err) {
+      errors.push(`fetch: ${err instanceof Error ? err.message : String(err)}`);
+    }
   }
   try {
     const viaHttp = await fetchViaNodeHttp(url, timeoutMs, accept, extraHeaders, postBody);
     if (!looksBlocked(viaHttp)) return viaHttp;
     if (viaHttp) blockedBody = viaHttp;
   } catch (err) {
-    lastErr = err;
+    errors.push(`http: ${err instanceof Error ? err.message : String(err)}`);
   }
   try {
     const viaCurl = await fetchViaCurl(url, timeoutMs, accept, extraHeaders, postBody);
     if (viaCurl && !looksBlocked(viaCurl)) return viaCurl;
     if (viaCurl) return viaCurl;
   } catch (err) {
-    lastErr = err;
+    errors.push(`curl: ${err instanceof Error ? err.message : String(err)}`);
   }
   if (blockedBody) return blockedBody;
-  throw lastErr instanceof Error ? lastErr : new Error(`fetch failed for ${url}`);
+  throw new Error(errors.join("; ") || `fetch failed for ${url}`);
 }
 
 async function fetchBody(
