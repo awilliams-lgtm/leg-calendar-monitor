@@ -1,4 +1,4 @@
-import { isEmptyRaw } from "@/lib/event-raw";
+import { pickRicherRaw } from "@/lib/event-raw";
 import { MATCH_THRESHOLD, bestMatchEvent, extractBills } from "@/lib/match";
 import { cleanOfficialTitle, completeOfficialTitle, isGenericCommitteeLabel, junkOfficialEvent } from "@/lib/title";
 import type { CalendarEvent } from "@/lib/types";
@@ -74,7 +74,7 @@ export function mergeOfficialEvent(existing: CalendarEvent, incoming: CalendarEv
     url: richerText(incoming.url, existing.url),
     bills,
     description: richerText(incoming.description, existing.description),
-    raw: isEmptyRaw(incoming.raw) ? existing.raw : incoming.raw,
+    raw: pickRicherRaw(incoming.raw, existing.raw),
   };
 }
 

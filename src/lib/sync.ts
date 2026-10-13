@@ -51,20 +51,27 @@ export async function officialEventsFor(code: string): Promise<{ events: Calenda
   }
 
   const vaIcsStale = src.code === "VA" && !collected.some((e) => (e.url || "").includes("liscdn"));
-  const needOpenStates =
-    Boolean(envVar("OPENSTATES_API_KEY")) && (collected.length === 0 || vaIcsStale);
-  if (needOpenStates) {
+  const haveOpenStates = Boolean(envVar("OPENSTATES_API_KEY"));
+  if (haveOpenStates) {
     try {
-      const os = await fetchOpenStatesEvents(src.openstates, afterIso());
-      collected.push(
-        ...os.map((e) => ({
-          ...e,
-          state: code,
-          start: wallClockInZone(e.start, src.tz),
-          end: e.end ? wallClockInZone(e.end, src.tz) : e.end,
-        })),
-      );
-      notes.push(`${code} openstates → ${os.length}`);
+      const fillIn = collected.length === 0 || vaIcsStale;
+      const os = await fetchOpenStatesEvents(src.openstates, afterIso(), fillIn ? 8 : 4);
+      const mapped = os.map((e) => ({
+        ...e,
+        state: code,
+        start: wallClockInZone(e.start, src.tz),
+        end: e.end ? wallClockInZone(e.end, src.tz) : e.end,
+      }));
+      if (fillIn) {
+        collected.push(...mapped);
+        notes.push(`${code} openstates → ${os.length}`);
+      } else if (mapped.length) {
+        const { foldOfficialIncoming } = await import("@/lib/official-merge");
+        const folded = foldOfficialIncoming(collected, mapped);
+        collected.length = 0;
+        collected.push(...folded);
+        notes.push(`${code} openstates enrich → ${os.length}`);
+      }
     } catch (err) {
       notes.push(`${code} openstates failed: ${err instanceof Error ? err.message : String(err)}`);
     }

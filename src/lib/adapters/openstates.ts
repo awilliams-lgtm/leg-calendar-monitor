@@ -49,7 +49,11 @@ async function openStatesGet(url: URL, key: string): Promise<Response> {
   throw new Error("Open States 429: rate limit");
 }
 
-export async function fetchOpenStatesEvents(jurisdiction: string, afterIso: string): Promise<CalendarEvent[]> {
+export async function fetchOpenStatesEvents(
+  jurisdiction: string,
+  afterIso: string,
+  maxPages = 8,
+): Promise<CalendarEvent[]> {
   const key = envVar("OPENSTATES_API_KEY");
   if (!key) {
     throw new Error("OPENSTATES_API_KEY is not set");
@@ -58,8 +62,9 @@ export async function fetchOpenStatesEvents(jurisdiction: string, afterIso: stri
   const events: CalendarEvent[] = [];
   let page = 1;
   const perPage = 20;
+  const lastPage = Math.max(1, Math.min(maxPages, 8));
 
-  while (page <= 8) {
+  while (page <= lastPage) {
     const url = new URL("https://v3.openstates.org/events");
     url.searchParams.set("jurisdiction", jurisdiction);
     url.searchParams.set("after", afterIso);

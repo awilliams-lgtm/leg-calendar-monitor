@@ -2,6 +2,8 @@
 
 Compares official 50-state and U.S. Congress calendars with [State Affairs](https://www.stateaffairs.com/) so you can see what is posted officially, what SA has listed, and where they diverge.
 
+This repo is the scraper. Event data lives in the `legcal` schema of the **sa-internal-tools** Supabase project. `schema.sql` is the schema of record (idempotent; generated from the live database).
+
 ## What counts as official
 
 Only events that appear on a public legislative or capitol calendar are stored as official. State Affairs also lists member fundraisers, executive boards, and advocacy events. Those stay on the SA side until the official site posts them. The scrapers do not invent dates.
