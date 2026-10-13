@@ -13,7 +13,12 @@ export function databaseUrl(): string | null {
   ];
   for (const url of candidates) {
     const trimmed = url?.trim() || "";
-    if (/^postgres(ql)?:\/\//i.test(trimmed)) return trimmed;
+    if (!/^postgres(ql)?:\/\//i.test(trimmed)) continue;
+    if (/supabase/i.test(trimmed) && !/search_path/i.test(trimmed)) {
+      const sep = trimmed.includes("?") ? "&" : "?";
+      return `${trimmed}${sep}options=-csearch_path%3Dlegcal`;
+    }
+    return trimmed;
   }
   return null;
 }

@@ -48,6 +48,7 @@ export function parseIcsText(ics: string): CalendarEvent[] {
       url: field("URL"),
       bills: extractBills(`${title}\n${field("DESCRIPTION")}`),
       description: field("DESCRIPTION"),
+      raw: { vevent: body.slice(0, 8000), uid, url: field("URL") },
     };
     events.push({ ...event, raw: officialSourceRaw(event) });
   }
