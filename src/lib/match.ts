@@ -1,4 +1,4 @@
-import { normalizeCommitteeTitle } from "@/lib/title";
+import { normalizeCommitteeTitle } from "@/lib/committee-title";
 
 const BILL_RE = /\b(AB|SB|HB|HR|SR|AJR|SJR|SCR|HCR|HJR|LB|LD|HF|SF|H|S)\s*\.?\s*(\d{1,5})\b/gi;
 
