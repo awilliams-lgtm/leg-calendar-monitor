@@ -55,6 +55,8 @@ const ABBR: Record<string, string[]> = {
   appr: ["appropriations"],
   approps: ["appropriations"],
   ai: ["artificial", "intelligence"],
+  clta: ["commerce", "labor", "transportation", "agriculture"],
+  sub: ["subcommittee"],
 };
 
 export function extractBills(text: string): string[] {

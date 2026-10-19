@@ -118,7 +118,8 @@ export function junkOfficialTitle(title: string): boolean {
   if (/\badd to calendar\b|\bview agenda\b/.test(t)) return true;
   if (/upon call of the chair/.test(t) && /\b\d{1,2}\/\d{1,2}\/\d{2,4}\b/.test(t)) return true;
   if (/^\d{1,2}:\d{2}/.test(title) && /\bstream\b/.test(t)) return true;
-  if (/^bill no\.?$|^author$|^committee name$|^house$|^senate$|^assembly$/.test(t)) return true;
+  if (/^bill no\.?$|^author$|^committee name$|^house$|^senate$|^assembly$|^legend:?$/.test(t)) return true;
+  if (/^(wnm|tba|bc|aa|ar)\s*=/.test(t)) return true;
   if (/^start time\b/.test(t)) return true;
   if (/committee group\s*\([a-z]\)\s*scheduled to meet/i.test(t)) return true;
   if (/^(senate|assembly|house)\s+chambers$/i.test(t)) return true;
@@ -191,6 +192,14 @@ export function junkOfficialEvent(e: {
   }
   if (e.state === "FL" && /VideoPlayer\.aspx/i.test(url) && !/MeetingId=/i.test(url)) return true;
   if (e.state === "FL" && /houseschedule\.aspx/i.test(url) && /^start time\b/i.test(e.title)) return true;
+  if (e.state === "MS" && /^legend:?$/i.test(e.title.trim())) return true;
+  if (
+    e.state === "MS" &&
+    /^hearing on\b/i.test(e.title.trim()) &&
+    !/\b(committee|commission|task force)\b/i.test(e.title)
+  ) {
+    return true;
+  }
   if (/dls\.virginia\.gov\/commissions\.html/i.test(url)) return true;
   if (/^https?:\/\/(?:www\.)?jlarc\.virginia\.gov\/?(?:meetings\.asp)?$/i.test(url)) return true;
   if (/foiacouncil\.dls\.virginia\.gov\/meetings\.htm/i.test(url)) return true;

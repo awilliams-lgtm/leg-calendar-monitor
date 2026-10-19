@@ -2587,7 +2587,7 @@ function parseMsHtml(html: string, pageUrl: string): CalendarEvent[] {
     if (headingEnd < 0) continue;
     const parsed = parseHumanDate(stripTags(part.slice(0, headingEnd)));
     if (!parsed) continue;
-    const cutoff = part.slice(headingEnd).search(/<hr\b|>\s*legend:/i);
+    const cutoff = part.slice(headingEnd).search(/<hr\b|<p[^>]*>\s*legend:|>\s*legend:/i);
     const body = cutoff >= 0 ? part.slice(headingEnd, headingEnd + cutoff) : part.slice(headingEnd);
     const blocks = [...body.matchAll(/<p([^>]*)>([\s\S]*?)<\/p>/gi)];
     let time = "";
@@ -2649,7 +2649,7 @@ function parseMsPre(html: string, pageUrl: string): CalendarEvent[] {
   const flush = () => {
     if (!pending || !parsed) return;
     const title = cleanOfficialTitle(pending.title.replace(/\s+/g, " ").trim());
-    if (!title || junkOfficialTitle(title) || /^reserved for\b/i.test(title) || /will not meet|^legend:/i.test(title)) {
+    if (!title || junkOfficialTitle(title) || /^reserved for\b/i.test(title) || /will not meet|^legend:?$/i.test(title)) {
       pending = null;
       return;
     }
