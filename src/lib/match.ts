@@ -1,3 +1,5 @@
+import { normalizeCommitteeTitle } from "@/lib/title";
+
 const BILL_RE = /\b(AB|SB|HB|HR|SR|AJR|SJR|SCR|HCR|HJR|LB|LD|HF|SF|H|S)\s*\.?\s*(\d{1,5})\b/gi;
 
 const STOP = new Set([
@@ -30,6 +32,7 @@ const STOP = new Set([
   "notice",
   "public",
   "special",
+  "other",
 ]);
 
 const MONTHS =
@@ -99,7 +102,7 @@ function dayOffset(a: string, b: string): number {
 }
 
 function forMatch(text: string): string {
-  return (text || "")
+  return normalizeCommitteeTitle(text || "")
     .replace(/https?:\/\/\S+/gi, " ")
     .replace(/opens?\s+in\s+a\s+new\s+tab/gi, " ")
     .replace(/\bto attend virtually\b[\s\S]*/gi, " ")
@@ -113,6 +116,9 @@ function forMatch(text: string): string {
     .replace(/^\s*20\d{2}\s+/g, " ")
     .replace(/\(\s*legislative council\s*\)/gi, " ")
     .replace(/\binterim joint (?:committee|subcommittee) on\b/gi, " ")
+    .replace(/\bjoint (?:committee|commission) on\b/gi, " ")
+    .replace(/\bnorth carolina\b/gi, " ")
+    .replace(/\bsession convenes\b/gi, " session ")
     .replace(/\bstudy (?:committee|meeting)\b/gi, " ")
     .replace(new RegExp(`\\b(?:${MONTHS})\\.?\\s+\\d{1,2}(?:st|nd|rd|th)?(?:,?\\s+\\d{4})?\\b`, "gi"), " ")
     .replace(/\b\d{1,2}\/\d{1,2}\/\d{2,4}\b/g, " ")

@@ -157,16 +157,18 @@ export async function mergeSaUpcoming(
     if (toDay && day > toDay) return false;
     return true;
   };
-  if (incoming.length || opts?.replaceEmpty) {
-    const kept = existing.filter((e) => !inWindow(e));
-    cache.events = cache.events.filter((e) => e.state !== state);
-    cache.events.push(...kept, ...incoming);
-  }
+  const existingWindow = existing.filter(inWindow);
+  const kept = existing.filter((e) => !inWindow(e));
+  const byId = new Map(existingWindow.map((e) => [e.sourceId, e]));
+  for (const ev of incoming) byId.set(ev.sourceId, ev);
+  const nextWindow = incoming.length ? [...byId.values()] : existingWindow;
+  cache.events = cache.events.filter((e) => e.state !== state);
+  cache.events.push(...kept, ...nextWindow);
   if (!cache.scraped.includes(state)) cache.scraped.push(state);
   cache.updatedAt = new Date().toISOString();
   cache.error = "";
   await saveSaCache(cache);
-  if (databaseUrl() && (incoming.length || opts?.replaceEmpty)) {
+  if (databaseUrl() && incoming.length) {
     try {
       const { upsertEvents } = await import("@/lib/data");
       await upsertEvents("sa", state, incoming);

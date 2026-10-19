@@ -107,8 +107,8 @@ export const STATE_SOURCES: StateSource[] = [
     H("https://www.legis.iowa.gov/committees/meetings/meetingsListChamber?chamber=H"),
     S("https://www.legis.iowa.gov/committees/meetings/meetingsListChamber?chamber=S"),
   ]),
-  src("KS", "Kansas", "America/Chicago", "https://kslegislature.gov/", [
-    J("https://kslegislature.gov/", "Interim schedule PDF"),
+  src("KS", "Kansas", "America/Chicago", "https://kslegislature.gov/b2025_26/recent-documents/", [
+    J("https://kslegislature.gov/b2025_26/recent-documents/", "Interim schedule"),
     J("https://kslegislature.gov/b2025_26/hearings/", "Hearings"),
   ]),
   src("KY", "Kentucky", "America/New_York", "https://apps.legislature.ky.gov/LegislativeCalendar", [
@@ -262,6 +262,20 @@ export function parseStateList(raw: string | null): string[] {
     .split(/[,+\s]+/)
     .map((s) => s.trim().toUpperCase())
     .filter((s) => STATE_BY_CODE.has(s));
+}
+
+const MS_HOUSE_SCHED = "https://billstatus.ls.state.ms.us/htms/h_sched.htm";
+const MS_SENATE_SCHED = "https://billstatus.ls.state.ms.us/htms/s_sched.htm";
+
+/** Mississippi agenda links belong on billstatus house/senate schedule pages. */
+export function publicOfficialMeetingUrl(state: string, url = "", chamber = ""): string {
+  const raw = String(url || "").trim();
+  if (state !== "MS") return raw;
+  const house = /h_sched|house-schedule/i.test(raw) || chamber === "house";
+  const senate = /s_sched|senate-schedule|senate-committee/i.test(raw) || chamber === "senate";
+  if (house && !senate) return MS_HOUSE_SCHED;
+  if (senate && !house) return MS_SENATE_SCHED;
+  return raw || MS_HOUSE_SCHED;
 }
 
 export function chamberBucket(chamber?: string): "house" | "senate" | "other" {
