@@ -32,11 +32,14 @@ const HIDDEN_FLAGS = [
   "unpublished",
   "unlisted",
   "is_unlisted",
-  "is_hidden_from_customer",
 ];
 const STATUS_KEYS = ["status", "visibility", "visibility_status", "publication_status", "publish_status"];
 
-/** Hidden meetings stay off SA comparison and are not treated as posted. */
+/**
+ * Skip meetings labeled hidden/unpublished in Pulse.
+ * Customer-only hiding (`is_hidden_from_customer`) still counts for coverage —
+ * those rows appear in Pulse and should match official calendars.
+ */
 export function isHiddenMeeting(input: {
   title?: string;
   description?: string;

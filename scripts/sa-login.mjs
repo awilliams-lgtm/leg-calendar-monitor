@@ -182,7 +182,7 @@ async function replayPages(page, capturedQuery, from, to) {
     const variables = { ...original, page: pageNo, itemsPerPage };
     if ("startDate" in original) variables.startDate = from;
     if ("endDate" in original) variables.endDate = to;
-    if ("includeHidden" in original) variables.includeHidden = false;
+    if ("includeHidden" in original) variables.includeHidden = true;
     const json = await page.evaluate(
       async ({ query, variables, operationName }) => {
         const res = await fetch("https://api.stateaffairs.com/graphql", {

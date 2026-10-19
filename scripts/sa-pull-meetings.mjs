@@ -14,7 +14,7 @@ function upcomingWindow(now = new Date()) {
 }
 
 function hidden(row) {
-  return Boolean(row?.is_hidden_from_customer || row?.hidden || row?.is_hidden || row?.is_cancelled);
+  return Boolean(row?.hidden || row?.is_hidden || row?.is_cancelled);
 }
 
 async function graphql(variables) {
@@ -52,7 +52,7 @@ async function pullRows({ from, to, stateId, label }) {
       itemsPerPage,
       startDate: from,
       endDate: to,
-      includeHidden: false,
+      includeHidden: true,
       ...(typeof stateId === "number" ? { state: stateId } : {}),
     });
     const chunk = listed.data || [];

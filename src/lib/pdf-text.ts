@@ -1,7 +1,7 @@
 import { execFile } from "child_process";
 import { promisify } from "util";
 import { inflateRawSync, inflateSync } from "zlib";
-import { mkdtemp, rm, writeFile } from "fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "fs/promises";
 import os from "os";
 import path from "path";
 
@@ -72,12 +72,44 @@ async function downloadPdf(url: string, dest: string, timeoutMs: number): Promis
   await writeFile(dest, Buffer.from(await res.arrayBuffer()));
 }
 
+function looksLikeScheduleText(text: string): boolean {
+  const t = text.replace(/\0/g, " ");
+  const letters = (t.match(/[A-Za-z]/g) || []).length;
+  if (letters < 40) return false;
+  return (
+    /\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\b/i.test(t) &&
+    /\b(?:committee|hearing|session|agenda|room|am|pm|tbd)\b/i.test(t)
+  );
+}
+
+async function extractWithUnpdf(buf: Buffer): Promise<string> {
+  const { extractText, getDocumentProxy } = await import("unpdf");
+  const pdf = await getDocumentProxy(new Uint8Array(buf));
+  const { text } = await extractText(pdf, { mergePages: true });
+  return Array.isArray(text) ? text.join("\n") : String(text || "");
+}
+
 export async function fetchPdfText(url: string, timeoutMs = 25000): Promise<string> {
   const dir = await mkdtemp(path.join(os.tmpdir(), "leg-pdf-"));
   const dest = path.join(dir, "doc.pdf");
   try {
     await downloadPdf(url, dest, timeoutMs);
-    return await runPython(dest);
+    try {
+      const py = await runPython(dest);
+      if (py.trim()) return py;
+    } catch {
+      /* Vercel has no Python; fall through to JS extractors. */
+    }
+    const buf = await readFile(dest);
+    try {
+      const js = await extractWithUnpdf(buf);
+      if (js.trim()) return js;
+    } catch {
+      /* keep going to the lightweight stream extractor */
+    }
+    const visible = extractPdfVisibleText(buf);
+    if (looksLikeScheduleText(visible)) return visible;
+    throw new Error(`PDF text extract failed for ${url}`);
   } finally {
     await rm(dir, { recursive: true, force: true }).catch(() => undefined);
   }

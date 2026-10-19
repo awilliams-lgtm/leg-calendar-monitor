@@ -2568,34 +2568,57 @@ function parseMs(html: string, pageUrl: string): CalendarEvent[] {
   return [...byId.values()].filter(usable);
 }
 
+function msPublicScheduleUrl(pageUrl: string): string {
+  if (/h_sched|house-schedule/i.test(pageUrl)) {
+    return "https://billstatus.ls.state.ms.us/htms/h_sched.htm";
+  }
+  if (/s_sched|senate-schedule|senate-committee/i.test(pageUrl)) {
+    return "https://billstatus.ls.state.ms.us/htms/s_sched.htm";
+  }
+  return "https://billstatus.ls.state.ms.us/htms/h_sched.htm";
+}
+
 function parseMsHtml(html: string, pageUrl: string): CalendarEvent[] {
   const byId = new Map<string, CalendarEvent>();
-  const house = /h_sched/i.test(pageUrl);
+  const house = /h_sched|house-schedule/i.test(pageUrl);
   const parts = html.split(/<p class="fw-bold">/i);
   for (const part of parts.slice(1)) {
     const headingEnd = part.search(/<\/p>/i);
     if (headingEnd < 0) continue;
     const parsed = parseHumanDate(stripTags(part.slice(0, headingEnd)));
     if (!parsed) continue;
-    const body = part.slice(headingEnd);
-    const blocks = [...body.matchAll(/<p[^>]*>([\s\S]*?)<\/p>/gi)].map((c) => stripTags(c[1]));
+    const cutoff = part.slice(headingEnd).search(/<hr\b|>\s*legend:/i);
+    const body = cutoff >= 0 ? part.slice(headingEnd, headingEnd + cutoff) : part.slice(headingEnd);
+    const blocks = [...body.matchAll(/<p([^>]*)>([\s\S]*?)<\/p>/gi)];
     let time = "";
     let room = "";
+    let lastId = "";
     for (const cell of blocks) {
-      if (/^time$|^room$/i.test(cell) || !cell) continue;
-      if (/^\d{1,2}:\d{2}\s*[ap]m$/i.test(cell)) {
-        time = cell;
+      const text = stripTags(cell[2]);
+      if (/^time$|^room$/i.test(text) || !text) continue;
+      if (/^\d{1,2}:\d{2}\s*[ap]m$/i.test(text)) {
+        time = text;
         continue;
       }
-      if (/^\d{2,4}[A-Z\-]?$/i.test(cell) || /^\d+[A-Z]$/i.test(cell) || /^[A-Z]?\d{2,4}[A-Z\-]*$/i.test(cell)) {
-        room = cell;
+      if (/^\d{2,4}[A-Z\-]?$/i.test(text) || /^\d+[A-Z]$/i.test(text) || /^[A-Z]?\d{2,4}[A-Z\-]*$/i.test(text)) {
+        room = text;
         continue;
       }
-      const title = cleanOfficialTitle(cell);
-      if (!title || junkOfficialTitle(title) || title.length < 4) continue;
+      if (/margin-left/i.test(cell[1])) {
+        const note = cleanOfficialTitle(text);
+        const prev = lastId ? byId.get(lastId) : undefined;
+        if (prev && note) {
+          const description = [prev.description, note].filter(Boolean).join("\n");
+          byId.set(lastId, { ...prev, description });
+        }
+        continue;
+      }
+      const title = cleanOfficialTitle(text);
+      if (!title || junkOfficialTitle(title) || title.length < 4 || /^legend:?$/i.test(title)) continue;
       const start = toIso(parsed.y, parsed.m, parsed.d, time);
       const id = hashId("MS", start, title);
       if (byId.has(id)) continue;
+      lastId = id;
       byId.set(
         id,
         ev({
@@ -2605,7 +2628,7 @@ function parseMsHtml(html: string, pageUrl: string): CalendarEvent[] {
           start,
           location: room ? `Room ${room}` : "",
           chamber: house ? "house" : /senate/i.test(pageUrl) ? "senate" : "",
-          url: pageUrl,
+          url: msPublicScheduleUrl(pageUrl),
         }),
       );
     }
@@ -2617,7 +2640,7 @@ function parseMsPre(html: string, pageUrl: string): CalendarEvent[] {
   const pre = html.match(/<pre[^>]*>([\s\S]*?)<\/pre>/i)?.[1];
   if (!pre) return [];
   const text = decodeEntities(pre.replace(/\r/g, ""));
-  const house = /h_sched/i.test(pageUrl);
+  const house = /h_sched|house-schedule/i.test(pageUrl);
   const byId = new Map<string, CalendarEvent>();
   const lines = text.split("\n");
   let parsed: { y: number; m: number; d: number } | null = null;
@@ -2645,7 +2668,7 @@ function parseMsPre(html: string, pageUrl: string): CalendarEvent[] {
           start,
           location: /^\d+[A-Z]?$/i.test(loc) ? `Room ${loc}` : loc,
           chamber: /\bjoint\b/.test(t) ? "joint" : house ? "house" : "senate",
-          url: pageUrl,
+          url: msPublicScheduleUrl(pageUrl),
         }),
       );
     }
@@ -3814,37 +3837,41 @@ async function fetchKsHearings(): Promise<CalendarEvent[]> {
   to.setDate(to.getDate() + 90);
   const byId = new Map<string, CalendarEvent>();
   const limit = 200;
-  for (let offset = 0; offset < 1000; offset += limit) {
-    const data = await fetchJson<{ results?: KsHearing[] }>(
-      `https://kslegislature.gov/api/v1/hearings/?from=${ksLocalDate(from)}&to=${ksLocalDate(to)}&limit=${limit}&offset=${offset}`,
-    );
-    const rows = Array.isArray(data.results) ? data.results : [];
-    for (const row of rows) {
-      if (/cancel/i.test(row.status || "")) continue;
-      const title = row.committee_title || row.hearing_type || "Hearing";
-      const parsed = parseHumanDate(row.hearing_date || "");
-      const start = parsed
-        ? toIso(parsed.y, parsed.m, parsed.d, row.hearing_time)
-        : row.hearing_datetime?.replace(/Z$/, "") || "";
-      if (!title || !start) continue;
-      const id = hashId("KS", start, `${row.committee_kpid || ""}|${title}|${row.room || ""}`);
-      if (byId.has(id)) continue;
-      const chamber = (row.chamber || "").toLowerCase();
-      byId.set(
-        id,
-        ev({
-          sourceId: id,
-          state: "KS",
-          title,
-          start,
-          location: row.room || "",
-          chamber: chamber.includes("senate") ? "senate" : chamber.includes("house") ? "house" : "",
-          url: "https://kslegislature.gov/b2025_26/hearings/",
-          bills: row.bill_numbers || [],
-        }),
+  try {
+    for (let offset = 0; offset < 1000; offset += limit) {
+      const data = await fetchJson<{ results?: KsHearing[] }>(
+        `https://kslegislature.gov/api/v1/hearings/?from=${ksLocalDate(from)}&to=${ksLocalDate(to)}&limit=${limit}&offset=${offset}`,
       );
+      const rows = Array.isArray(data.results) ? data.results : [];
+      for (const row of rows) {
+        if (/cancel/i.test(row.status || "")) continue;
+        const title = row.committee_title || row.hearing_type || "Hearing";
+        const parsed = parseHumanDate(row.hearing_date || "");
+        const start = parsed
+          ? toIso(parsed.y, parsed.m, parsed.d, row.hearing_time)
+          : row.hearing_datetime?.replace(/Z$/, "") || "";
+        if (!title || !start) continue;
+        const id = hashId("KS", start, `${row.committee_kpid || ""}|${title}|${row.room || ""}`);
+        if (byId.has(id)) continue;
+        const chamber = (row.chamber || "").toLowerCase();
+        byId.set(
+          id,
+          ev({
+            sourceId: id,
+            state: "KS",
+            title,
+            start,
+            location: row.room || "",
+            chamber: chamber.includes("senate") ? "senate" : chamber.includes("house") ? "house" : "",
+            url: "https://kslegislature.gov/b2025_26/hearings/",
+            bills: row.bill_numbers || [],
+          }),
+        );
+      }
+      if (rows.length < limit) break;
     }
-    if (rows.length < limit) break;
+  } catch {
+    /* hearings API is empty in interim; PDF/special pages still apply */
   }
   try {
     const specials = await fetchKsSpecialPages();
@@ -3865,15 +3892,22 @@ async function fetchKsHearings(): Promise<CalendarEvent[]> {
   return [...byId.values()].filter(usable);
 }
 
+const KS_MONTH = "Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sept?|Oct|Nov|Dec";
+
 function parseKsInterimPdf(text: string, pageUrl: string): CalendarEvent[] {
   const byId = new Map<string, CalendarEvent>();
-  const year = new Date().getFullYear();
+  const headerYears = [...text.slice(0, 2500).matchAll(/\b(20\d{2})\b/g)].map((m) => Number(m[1]));
+  const year = headerYears.at(-1) || new Date().getFullYear();
+  const splitRe = new RegExp(`(?=(?:${KS_MONTH})\\.?\\s+\\d{1,2}\\s+\\S+\\s+(?:TBD|\\d{1,2}:\\d{2}))`, "gi");
   const lines = text
+    .replace(splitRe, "\n")
     .split(/\r?\n/)
     .map((l) => l.replace(/\s+/g, " ").trim())
     .filter(Boolean);
-  const startRe =
-    /^(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sept?|Oct|Nov|Dec)\.?\s+(\d{1,2})\s+(\S+)\s+(TBD|\d{1,2}:\d{2}\s*[ap]m)\s+(.*)$/i;
+  const startRe = new RegExp(
+    `^(${KS_MONTH})\\.?\\s+(\\d{1,2})\\s+(\\S+)\\s+(TBD|\\d{1,2}:\\d{2}\\s*[ap]\\.?m\\.?)\\s+(.*)$`,
+    "i",
+  );
   let i = 0;
   while (i < lines.length) {
     const m = lines[i].match(startRe);
@@ -3890,7 +3924,12 @@ function parseKsInterimPdf(text: string, pageUrl: string): CalendarEvent[] {
       const extra = next.replace(/\bAgenda\b/gi, " ").trim();
       if (extra) title = `${title} ${extra}`.replace(/\s+/g, " ").trim();
     }
-    title = title.replace(/^(J|H|S)[-\s]+/i, "").trim();
+    title = title
+      .replace(/^J[-\s]+/i, "Joint ")
+      .replace(/^H[-\s]+/i, "House ")
+      .replace(/^S[-\s]+/i, "Senate ")
+      .replace(/\s+/g, " ")
+      .trim();
     const parsed = parseHumanDate(`${m[1]} ${m[2]} ${year}`);
     if (!parsed || !title || junkOfficialTitle(title)) continue;
     const start = toIso(parsed.y, parsed.m, parsed.d, /tbd/i.test(m[4]) ? "" : m[4]);
@@ -3913,26 +3952,49 @@ function parseKsInterimPdf(text: string, pageUrl: string): CalendarEvent[] {
   return [...byId.values()].filter(usable);
 }
 
+function ksInterimPdfHrefs(html: string, pageUrl: string): string[] {
+  return [
+    ...html.matchAll(/href="([^"]*interim_schedule[^"]*)"/gi),
+    ...html.matchAll(/href='([^']*interim_schedule[^']*)'/gi),
+  ].map((m) => absUrl(pageUrl, m[1]));
+}
+
+function ksPdfRank(url: string): number {
+  const dated = url.match(/interim_schedule_(\d{1,2})_(\d{1,2})_(\d{4})/i);
+  if (dated) return Number(dated[3]) * 10_000 + Number(dated[1]) * 100 + Number(dated[2]);
+  return Number((url.match(/interim_schedule-(\d+)/i) || [])[1] || 0);
+}
+
 async function fetchKsInterimPdf(): Promise<CalendarEvent[]> {
-  const home = await fetchText("https://kslegislature.gov/", 20000);
-  const hrefs = [...home.matchAll(/href="([^"]*interim_schedule[^"]*\.pdf[^"]*)"/gi)].map((m) => m[1]);
-  const ranked = hrefs.sort((a, b) => {
-    const num = (s: string) => Number((s.match(/interim_schedule-(\d+)/i) || [])[1] || 0);
-    return num(b) - num(a);
-  });
+  const pages = [
+    "https://kslegislature.gov/b2025_26/recent-documents/",
+    "https://www.kslegislature.gov/b2025_26/recent-documents/",
+    "https://kslegislature.gov/",
+  ];
+  const hrefs: string[] = [];
+  for (const page of pages) {
+    try {
+      hrefs.push(...ksInterimPdfHrefs(await fetchText(page, 20000), page));
+    } catch {
+      /* try the next listing page */
+    }
+  }
+  const ranked = [...new Set(hrefs)].sort((a, b) => ksPdfRank(b) - ksPdfRank(a));
   const urls = [
-    ...ranked.map((h) => absUrl("https://kslegislature.gov/", h)),
+    ...ranked,
     "https://kslegislature.gov/b2025_26/bills/download/?apn=b2025_26/recent_docs/interim_schedule.pdf",
   ];
-  for (const url of [...new Set(urls)]) {
+  const byId = new Map<string, CalendarEvent>();
+  for (const url of [...new Set(urls)].slice(0, 6)) {
     try {
-      const rows = parseKsInterimPdf(await fetchPdfText(url), url);
-      if (rows.length) return rows;
+      for (const row of parseKsInterimPdf(await fetchPdfText(url), url)) {
+        if (!byId.has(row.sourceId)) byId.set(row.sourceId, row);
+      }
     } catch {
       /* try next numbered schedule */
     }
   }
-  return [];
+  return [...byId.values()];
 }
 
 type KsCommittee = { kpid?: string; title?: string; chamber?: string; committee_type?: string; status?: string };
@@ -3945,18 +4007,20 @@ async function fetchKsSpecialPages(): Promise<CalendarEvent[]> {
       /special|post audit|interim|task force/i.test(`${c.committee_type} ${c.title} ${c.kpid}`),
   );
   const window = upcomingWindow();
-  const pages = await mapPool(wanted.slice(0, 25), 4, async (com) => {
+  const pages = await mapPool(wanted.slice(0, 80), 4, async (com) => {
     const kpid = com.kpid;
     if (!kpid) return [] as CalendarEvent[];
+    const pageUrl = `https://kslegislature.gov/b2025_26/committees/${encodeURIComponent(kpid)}/`;
     try {
-      const html = await fetchText(`https://kslegislature.gov/b2025_26/committees/${kpid}/`, 20000);
+      const html = await fetchText(pageUrl, 20000);
       const dates =
         html.match(
-          /\b(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},\s+2026\b/gi,
+          /\b(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2}(?:\s*[-–]\s*\d{1,2})?,?\s+2026\b/gi,
         ) || [];
       const title = com.title || "Special committee";
       const chamber = (com.chamber || "").toLowerCase();
       return [...new Set(dates)].slice(0, 8).flatMap((raw) => {
+        if (/\bthrough\b/i.test(raw) || /[-–]/.test(raw)) return [];
         const parsed = parseHumanDate(raw);
         if (!parsed) return [];
         const start = toIso(parsed.y, parsed.m, parsed.d);
@@ -3969,7 +4033,7 @@ async function fetchKsSpecialPages(): Promise<CalendarEvent[]> {
             title,
             start,
             chamber: chamber.includes("senate") ? "senate" : chamber.includes("house") ? "house" : "joint",
-            url: `https://kslegislature.gov/b2025_26/committees/${kpid}/`,
+            url: pageUrl,
           }),
         ];
       });

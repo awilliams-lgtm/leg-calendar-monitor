@@ -1,12 +1,13 @@
 import { readFile } from "fs/promises";
 import path from "path";
 import type { CalendarEvent } from "@/lib/types";
-import { upcomingWindow } from "@/lib/dates";
+import { daysInRange, upcomingWindow } from "@/lib/dates";
 import { isHiddenMeeting } from "@/lib/hidden";
 import { eventDateKey, extractBills } from "@/lib/match";
 import { mapPool } from "@/lib/html";
 import {
   GET_HEARINGS_QUERY,
+  GET_MEETINGS_QUERY,
   MEETINGS_SEARCH_V2_QUERY,
   PROFILE_QUERY,
   SA_GRAPHQL_URL,
@@ -293,28 +294,99 @@ function meetingsQueryUnsupported(err: unknown): boolean {
   return /HTTP 400|VALIDATION_ERROR|cannot query field|unknown field|getMeetingsList/i.test(msg);
 }
 
-function localIsoDay(offset = 0): string {
-  const d = new Date();
-  d.setDate(d.getDate() + offset);
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+const HEARING_EXTRA = {
+  includeNeedsReviewBillHearings: false,
+  onlyNeedsReviewBillHearings: false,
+};
+
+function inRange(ev: CalendarEvent, from: string, to: string): boolean {
+  const day = eventDateKey(ev.start) || saEventDay(ev.start);
+  return Boolean(day && day >= from && day <= to);
 }
 
-async function fetchHearings(stateCode: string, stateId: number): Promise<CalendarEvent[]> {
-  const events = await paginate(stateCode, stateId, GET_HEARINGS_QUERY, "GetHearingsList", "getHearingsList", {
-    includeNeedsReviewBillHearings: false,
-    onlyNeedsReviewBillHearings: false,
-  });
-  const have = new Set(events.map((e) => e.sourceId));
-  for (let offset = 0; offset <= 14; offset += 1) {
-    const dayEvents = await paginate(stateCode, stateId, GET_HEARINGS_QUERY, "GetHearingsList", "getHearingsList", {
-      eventDate: localIsoDay(offset),
-      includeNeedsReviewBillHearings: false,
-      onlyNeedsReviewBillHearings: false,
-    });
-    for (const ev of dayEvents) {
-      if (!have.has(ev.sourceId)) {
-        have.add(ev.sourceId);
-        events.push(ev);
+async function fetchStateLists(
+  stateCode: string,
+  stateId: number,
+  from: string,
+  to: string,
+  thorough: boolean,
+): Promise<CalendarEvent[]> {
+  const have = new Set<string>();
+  const events: CalendarEvent[] = [];
+  const add = (rows: CalendarEvent[]) => {
+    for (const ev of rows) {
+      if (!inRange(ev, from, to) || have.has(ev.sourceId)) continue;
+      have.add(ev.sourceId);
+      events.push(ev);
+    }
+  };
+
+  try {
+    add(
+      await paginateNewestFrom(
+        stateCode,
+        stateId,
+        GET_MEETINGS_QUERY,
+        "GetMeetingsList",
+        "getMeetingsList",
+        {},
+        from,
+      ),
+    );
+  } catch (err) {
+    if (!meetingsQueryUnsupported(err)) {
+      /* try hearings even if meetings list failed */
+    }
+  }
+  try {
+    add(
+      await paginateNewestFrom(
+        stateCode,
+        stateId,
+        GET_HEARINGS_QUERY,
+        "GetHearingsList",
+        "getHearingsList",
+        HEARING_EXTRA,
+        from,
+      ),
+    );
+  } catch {
+    /* hearings list is optional */
+  }
+
+  if (thorough) {
+    for (const day of daysInRange(from, to).slice(0, 60)) {
+      try {
+        add(
+          await paginate(
+            stateCode,
+            stateId,
+            GET_MEETINGS_QUERY,
+            "GetMeetingsList",
+            "getMeetingsList",
+            { eventDate: day },
+            3,
+            50,
+          ),
+        );
+      } catch {
+        /* per-day meetings are extra */
+      }
+      try {
+        add(
+          await paginate(
+            stateCode,
+            stateId,
+            GET_HEARINGS_QUERY,
+            "GetHearingsList",
+            "getHearingsList",
+            { eventDate: day, ...HEARING_EXTRA },
+            3,
+            50,
+          ),
+        );
+      } catch {
+        /* per-day hearings are extra */
       }
     }
   }
@@ -431,7 +503,7 @@ async function fetchSavedMeetingsWindow(
     const variables: Record<string, unknown> = { ...original, page, itemsPerPage };
     if ("startDate" in original) variables.startDate = from;
     if ("endDate" in original) variables.endDate = to;
-    if ("includeHidden" in original) variables.includeHidden = false;
+    if ("includeHidden" in original) variables.includeHidden = true;
     const data = await saQuery<Record<string, ListPayload | undefined>>(saved.query, variables, operationName);
     const listed = listPayload(data);
     const chunk = listed?.data || [];
@@ -452,7 +524,7 @@ async function fetchMeetingsSearchRows(from: string, to: string, stateId?: numbe
         itemsPerPage,
         startDate: from,
         endDate: to,
-        includeHidden: false,
+        includeHidden: true,
         ...(typeof stateId === "number" ? { state: stateId } : {}),
       },
       "MeetingsSearchV2",
@@ -465,24 +537,18 @@ async function fetchMeetingsSearchRows(from: string, to: string, stateId?: numbe
   return rows;
 }
 
-async function fetchHearingsWindow(
+async function fetchListsWindow(
   from: string,
   to: string,
   codeById: Map<number, string>,
   onlyCodes?: Set<string>,
 ): Promise<Map<string, CalendarEvent[]>> {
   const pairs = [...codeById.entries()].filter(([, code]) => !onlyCodes?.size || onlyCodes.has(code));
-  const parts = await mapPool(pairs, 4, async ([id, code]) => {
+  const thorough = Boolean(onlyCodes?.size && onlyCodes.size <= 6);
+  const parts = await mapPool(pairs, thorough ? 2 : 4, async ([id, code]) => {
     try {
-      const events = await fetchHearings(code, id);
       const map = new Map<string, CalendarEvent[]>();
-      map.set(
-        code,
-        events.filter((ev) => {
-          const day = eventDateKey(ev.start) || saEventDay(ev.start);
-          return Boolean(day && day >= from && day <= to);
-        }),
-      );
+      map.set(code, await fetchStateLists(code, id, from, to, thorough));
       return map;
     } catch {
       return new Map<string, CalendarEvent[]>();
@@ -563,13 +629,11 @@ export async function fetchSaAdminWindow(
   try {
     const fromSearch = await fetchMeetingsSearchWindow(from, to, codeById, onlyCodes);
     let merged = fromSearch;
-    if (onlyCodes?.size) {
-      try {
-        const hearings = await fetchHearingsWindow(from, to, codeById, onlyCodes);
-        merged = mergeByState([fromSearch, hearings]);
-      } catch {
-        /* hearings list is optional when meetings search already returned rows */
-      }
+    try {
+      const lists = await fetchListsWindow(from, to, codeById, onlyCodes);
+      merged = mergeByState([fromSearch, lists]);
+    } catch {
+      /* meetings/hearings lists are extra when search already returned rows */
     }
     if ([...merged.values()].some((list) => list.length)) {
       rememberAdminWindow(from, to, merged, onlyCodes);
