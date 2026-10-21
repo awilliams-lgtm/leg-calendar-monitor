@@ -105,7 +105,7 @@ export function StateCalendar({ code, initialMonth }: { code: string; initialMon
           </Link>
           <h1 className="mt-1 text-3xl">{data?.state?.name || code} Legislature</h1>
           <p className="mt-1 text-sm text-muted">
-            Official meetings in this month, next to what State Affairs listed for the same month.
+            Compare the official legislature calendar with what SA Pro listed for the same month.
             Teal = that official meeting already has a same-day SA match. Amber = it does not.
           </p>
         </div>
@@ -136,7 +136,11 @@ export function StateCalendar({ code, initialMonth }: { code: string; initialMon
             All chambers
           </FilterChip>
           {chambers.map((f) => (
-            <FilterChip key={f.chamber} active={chamber === f.chamber} onClick={() => setChamber(f.chamber)}>
+            <FilterChip
+              key={`${f.chamber}-${f.label}`}
+              active={chamber === f.chamber}
+              onClick={() => setChamber(f.chamber)}
+            >
               {f.label}
             </FilterChip>
           ))}
@@ -158,8 +162,8 @@ export function StateCalendar({ code, initialMonth }: { code: string; initialMon
       {data?.saNote && <p className="text-xs text-muted">{data.saNote}</p>}
       {data?.error && <p className="text-sm text-danger">{data.error}</p>}
 
-      <div className="grid gap-6 lg:grid-cols-[minmax(0,1.15fr)_minmax(0,0.85fr)]">
-        <section className="rounded-2xl border border-border bg-panel p-4 sm:p-5">
+      <div className="grid items-start gap-4 md:grid-cols-[minmax(14rem,16.5rem)_minmax(0,1fr)_minmax(0,1fr)]">
+        <section className="rounded-2xl border border-border bg-panel p-3 sm:p-4 md:row-span-2">
           {!data ? (
             <p className="text-sm text-muted">Loading calendar…</p>
           ) : (
@@ -168,12 +172,13 @@ export function StateCalendar({ code, initialMonth }: { code: string; initialMon
               month={monthNum}
               days={visibleDays}
               selected={selected}
+              snug
               onSelect={(iso) => setSelected((cur) => (cur === iso ? "" : iso))}
             />
           )}
-          <div className="mt-4 flex flex-wrap gap-4 text-sm">
+          <div className="mt-3 grid gap-1 text-xs text-muted">
             <span>
-              <strong>{onSaCount + missingCount}</strong> official this month
+              <strong className="text-foreground">{onSaCount + missingCount}</strong> official this month
             </span>
             <span>
               <strong className="text-teal">{onSaCount}</strong> already on SA
@@ -182,59 +187,65 @@ export function StateCalendar({ code, initialMonth }: { code: string; initialMon
               <strong className="text-accent">{missingCount}</strong> missing from SA
             </span>
             <span>
-              <strong>{saCount}</strong> meetings on SA’s calendar this month
+              <strong className="text-foreground">{saCount}</strong> on SA Pro this month
             </span>
             {data?.state?.officialUrl && (
-              <a href={data.state.officialUrl} target="_blank" rel="noreferrer">
+              <a href={data.state.officialUrl} target="_blank" rel="noreferrer" className="mt-1">
                 Official site
               </a>
             )}
           </div>
         </section>
 
-        <section className="rounded-2xl border border-border bg-panel p-4 sm:p-5">
-          <div className="mb-3 flex items-baseline justify-between gap-2">
-            <h2 className="text-xl">
-              {selected
-                ? new Date(`${selected}T12:00:00`).toLocaleDateString("en-US", {
-                    weekday: "long",
-                    month: "long",
-                    day: "numeric",
-                  })
-                : "Compare"}
-            </h2>
-            {selected && (
-              <button type="button" className="text-xs text-muted" onClick={() => setSelected("")}>
-                Show month
-              </button>
-            )}
-          </div>
+        <div className="flex items-baseline justify-between gap-2 md:col-span-2">
+          <h2 className="text-xl">
+            {selected
+              ? new Date(`${selected}T12:00:00`).toLocaleDateString("en-US", {
+                  weekday: "long",
+                  month: "long",
+                  day: "numeric",
+                })
+              : "This month"}
+          </h2>
+          {selected && (
+            <button type="button" className="text-xs text-muted" onClick={() => setSelected("")}>
+              Show month
+            </button>
+          )}
+        </div>
+
+        <section className="rounded-2xl border border-border bg-panel p-3 sm:p-4">
           {!data ? (
             <p className="text-sm text-muted">Loading events…</p>
           ) : (
-            <div className="space-y-5">
-              <AgendaList
-                heading="Official legislature"
-                empty={
-                  filtered.length === 0
-                    ? "No events found on this official calendar for this month."
-                    : "No official events on this day."
-                }
-                items={dayItems}
-                timeZone={stateByCode(code)?.tz}
-              />
-              <AgendaList
-                heading="State Affairs meetings"
-                empty={
-                  saCount === 0
-                    ? `State Affairs has no meetings dated in ${data?.label || "this month"}.`
-                    : "No SA meetings on this day."
-                }
-                items={saDayItems}
-                saSide
-                timeZone={stateByCode(code)?.tz}
-              />
-            </div>
+            <AgendaList
+              heading="Official legislature"
+              empty={
+                filtered.length === 0
+                  ? "No events found on this official calendar for this month."
+                  : "No official events on this day."
+              }
+              items={dayItems}
+              timeZone={stateByCode(code)?.tz}
+            />
+          )}
+        </section>
+
+        <section className="rounded-2xl border border-border bg-panel p-3 sm:p-4">
+          {!data ? (
+            <p className="text-sm text-muted">Loading events…</p>
+          ) : (
+            <AgendaList
+              heading="SA Pro meetings"
+              empty={
+                saCount === 0
+                  ? `SA Pro has no meetings dated in ${data?.label || "this month"}.`
+                  : "No SA Pro meetings on this day."
+              }
+              items={saDayItems}
+              saSide
+              timeZone={stateByCode(code)?.tz}
+            />
           )}
         </section>
       </div>
@@ -275,9 +286,9 @@ function AgendaList({
       {items.length === 0 ? (
         <p className="text-sm text-muted">{empty}</p>
       ) : (
-        <ul className="space-y-3">
+        <ul className="space-y-2 md:max-h-[min(70vh,44rem)] md:overflow-y-auto md:pr-1">
           {items.map((ev) => (
-            <li key={`${ev.sourceId}-${ev.start}`} className="rounded-xl border border-border/80 bg-background/60 p-3">
+            <li key={`${ev.sourceId}-${ev.start}`} className="rounded-xl border border-border/80 bg-background/60 p-2.5">
               <div className="flex flex-wrap items-start justify-between gap-2">
                 <div className="min-w-0">
                   <div className="text-xs font-medium uppercase tracking-wide text-muted">
