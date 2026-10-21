@@ -306,6 +306,23 @@ export async function compareState(state: string): Promise<{ newGaps: number; op
     if (inserted[0]?.inserted) newGaps += 1;
   }
 
+  const leftover = (await q`
+    SELECT official_source_id FROM calendar_gaps
+    WHERE state = ${state} AND status = 'open'
+  `) as Array<{ official_source_id: string }>;
+  const officialById = new Map(official.map((e) => [e.sourceId, e]));
+  for (const row of leftover) {
+    const ev = officialById.get(row.official_source_id);
+    if (!ev) continue;
+    const match = bestMatch(ev, sa);
+    if (match.score < MATCH_THRESHOLD) continue;
+    await q`
+      UPDATE calendar_gaps
+      SET status = 'matched', best_score = ${match.score}, sa_match_title = ${match.title}, updated_at = NOW()
+      WHERE state = ${state} AND official_source_id = ${row.official_source_id} AND status = 'open'
+    `;
+  }
+
   if (seenOfficial.size) {
     await q`
       UPDATE calendar_gaps
