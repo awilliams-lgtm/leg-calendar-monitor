@@ -1,3 +1,6 @@
+import { formatWhen } from "@/lib/dates";
+import { stateByCode } from "@/lib/states";
+
 export async function notifySlack(text: string) {
   const url = process.env.SLACK_WEBHOOK_URL?.trim();
   if (!url) return;
@@ -31,7 +34,7 @@ export function formatGapAlert(opts: {
   url?: string;
 }): { slack: string; subject: string; html: string } {
   const label = opts.kind === "missing_on_sa" ? "Missing on State Affairs" : "New official calendar event";
-  const when = opts.start.slice(0, 16).replace("T", " ");
+  const when = formatWhen(opts.start, stateByCode(opts.state)?.tz);
   const link = opts.url ? ` <${opts.url}>` : "";
   const slack = `[${opts.state}] ${label}: ${opts.title} (${when})${link}`;
   const subject = `[${opts.state}] ${label}: ${opts.title}`;

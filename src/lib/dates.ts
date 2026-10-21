@@ -123,3 +123,9 @@ export function formatTime(start: string, timeZone?: string): string {
   const hr = ((h + 11) % 12) + 1;
   return `${hr}:${String(m).padStart(2, "0")} ${ap}`;
 }
+
+export function formatWhen(start: string, timeZone?: string): string {
+  const day = eventDay(start);
+  const clock = formatTime(start, timeZone);
+  return clock ? `${day} ${clock}` : day;
+}

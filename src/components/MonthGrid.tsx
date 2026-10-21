@@ -24,6 +24,7 @@ export function MonthGrid({
   selected,
   onSelect,
   compact,
+  snug,
 }: {
   year: number;
   month: number;
@@ -31,6 +32,7 @@ export function MonthGrid({
   selected?: string;
   onSelect?: (iso: string) => void;
   compact?: boolean;
+  snug?: boolean;
 }) {
   const n = daysInMonth(year, month);
   const pad = weekdayIndex(year, month, 1);
@@ -42,25 +44,27 @@ export function MonthGrid({
   }
   while (cells.length % 7 !== 0) cells.push({ day: null, iso: "" });
 
-  const labels = compact ? SHORT : LONG;
+  const size = compact ? "compact" : snug ? "snug" : "default";
+  const labels = size === "default" ? LONG : SHORT;
   const today = todayKey();
+  const emptyH = size === "compact" ? "h-6" : size === "snug" ? "min-h-10" : "min-h-16";
+  const cellH = size === "compact" ? "h-6 text-[10px]" : size === "snug" ? "min-h-10 p-0.5 text-xs" : "min-h-16 p-1 text-sm";
+  const labelCls = size === "compact" ? "pb-1 text-[9px]" : size === "snug" ? "pb-1 text-[10px]" : "pb-2 text-[11px]";
 
   return (
-    <div className={compact ? "select-none" : "select-none"}>
+    <div className="select-none">
       <div className="grid grid-cols-7">
         {labels.map((label, i) => (
           <div
             key={`${label}-${i}`}
-            className={`text-center font-medium uppercase tracking-wide text-muted ${
-              compact ? "pb-1 text-[9px]" : "pb-2 text-[11px]"
-            }`}
+            className={`text-center font-medium uppercase tracking-wide text-muted ${labelCls}`}
           >
             {label}
           </div>
         ))}
         {cells.map((cell, i) => {
           if (!cell.day) {
-            return <div key={`empty-${i}`} className={compact ? "h-6" : "min-h-16"} />;
+            return <div key={`empty-${i}`} className={emptyH} />;
           }
           const counts = days[cell.iso];
           const isSelected = selected === cell.iso;
@@ -68,7 +72,7 @@ export function MonthGrid({
           const clickable = Boolean(onSelect);
           const className = [
             "relative flex flex-col items-center justify-start rounded-md transition-colors",
-            compact ? "h-6 text-[10px]" : "min-h-16 p-1 text-sm",
+            cellH,
             cellTone(counts),
             isSelected ? "ring-2 ring-teal" : "",
             isToday && !isSelected ? "ring-1 ring-border" : "",
@@ -77,14 +81,14 @@ export function MonthGrid({
 
           const inner = (
             <>
-              <span className={compact ? "leading-6" : "font-medium"}>{cell.day}</span>
-              {!compact && counts && (counts.onSa > 0 || counts.missing > 0) && (
+              <span className={size === "compact" ? "leading-6" : "font-medium"}>{cell.day}</span>
+              {size !== "compact" && counts && (counts.onSa > 0 || counts.missing > 0) && (
                 <span className="mt-auto flex gap-0.5 pb-0.5">
                   {counts.onSa > 0 && <span className="h-1.5 w-1.5 rounded-full bg-teal" />}
                   {counts.missing > 0 && <span className="h-1.5 w-1.5 rounded-full bg-accent" />}
                 </span>
               )}
-              {compact && counts && (counts.onSa > 0 || counts.missing > 0) && (
+              {size === "compact" && counts && (counts.onSa > 0 || counts.missing > 0) && (
                 <span className="absolute bottom-0.5 left-1/2 flex -translate-x-1/2 gap-px">
                   {counts.onSa > 0 && <span className="h-1 w-1 rounded-full bg-teal" />}
                   {counts.missing > 0 && <span className="h-1 w-1 rounded-full bg-accent" />}

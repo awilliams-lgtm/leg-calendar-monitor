@@ -1,6 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { formatWhen } from "@/lib/dates";
+import { stateByCode } from "@/lib/states";
 import type { NotificationRow } from "@/lib/types";
 
 export default function AlertsPage() {
@@ -59,7 +61,7 @@ export default function AlertsPage() {
               <span className="text-xs uppercase tracking-wide text-muted">
                 {n.kind === "missing_on_sa" ? "Missing on SA" : "New official"}
               </span>
-              <span className="text-xs text-muted">{n.start.slice(0, 16).replace("T", " ")}</span>
+              <span className="text-xs text-muted">{formatWhen(n.start, stateByCode(n.state)?.tz)}</span>
               {!n.readAt && <span className="text-xs text-accent">unread</span>}
             </div>
             <div className="mt-1">

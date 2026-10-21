@@ -5,7 +5,7 @@ import { extractBills } from "@/lib/match";
 import { absUrl, decodeEntities, fetchJson, fetchText, fetchTextPost, mapPool, MONTHS, parseHumanDate, stripTags, toIso } from "@/lib/html";
 import { mergeOfficialEvent } from "@/lib/official-merge";
 import { extractPdfVisibleText, fetchPdfText } from "@/lib/pdf-text";
-import { upcomingWindow } from "@/lib/dates";
+import { upcomingWindow, wallClockInZone } from "@/lib/dates";
 import { officialSourceRaw } from "@/lib/event-raw";
 import { STATE_SOURCES, type StateSource } from "@/lib/states";
 import { cleanOfficialTitle, completeOfficialTitle, junkOfficialEvent, junkOfficialTitle, withChamberLabel } from "@/lib/title";
@@ -669,7 +669,7 @@ export async function fetchAlMeetings(): Promise<{ events: CalendarEvent[]; tabC
     for (const row of rows) {
       const id = String(row.id || "").trim();
       const title = row.committeeName || row.title || "Meeting";
-      const start = row.startDate || "";
+      const start = wallClockInZone(row.startDate || "", "America/Chicago");
       if (!id || !start || !title) continue;
       if (byId.has(id)) continue;
       const bills = (row.agendaItems || []).map((a) => a.instrumentNbr).filter(Boolean) as string[];
@@ -3849,7 +3849,7 @@ async function fetchKsHearings(): Promise<CalendarEvent[]> {
         const parsed = parseHumanDate(row.hearing_date || "");
         const start = parsed
           ? toIso(parsed.y, parsed.m, parsed.d, row.hearing_time)
-          : row.hearing_datetime?.replace(/Z$/, "") || "";
+          : wallClockInZone(row.hearing_datetime || "", "America/Chicago");
         if (!title || !start) continue;
         const id = hashId("KS", start, `${row.committee_kpid || ""}|${title}|${row.room || ""}`);
         if (byId.has(id)) continue;
@@ -5249,7 +5249,7 @@ export async function fetchWyMeetings(): Promise<CalendarEvent[]> {
       const parsed = parseHumanDate(raw);
       if (!parsed) continue;
       const hasClock = /T(?!00:00:00)\d{2}:\d{2}/.test(raw);
-      const start = hasClock ? raw.replace(/Z$/, "").slice(0, 19) : toIso(parsed.y, parsed.m, parsed.d, row.startTime || "");
+      const start = hasClock ? wallClockInZone(raw, "America/Denver") : toIso(parsed.y, parsed.m, parsed.d, row.startTime || "");
       const id = hashId("WY", start, title);
       if (byId.has(id)) continue;
       const loc = [row.address1, row.city, row.state].filter(Boolean).join(", ");
