@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { CalendarLegend, SaBadge } from "@/components/SaBadge";
 import { MonthGrid } from "@/components/MonthGrid";
-import { eventDay, formatTime, parseMonth, shiftMonth } from "@/lib/dates";
+import { compareStarts, eventDay, formatDay, formatTime, parseMonth, shiftMonth } from "@/lib/dates";
 import { chamberLabel, stateByCode } from "@/lib/states";
 import { MeetingExtras } from "@/components/MeetingExtras";
 import { titlesEqual } from "@/lib/match";
@@ -80,16 +80,18 @@ export function StateCalendar({ code, initialMonth }: { code: string; initialMon
     return days;
   }, [filtered, chamber, coverage, data]);
 
+  const tz = stateByCode(code)?.tz;
+
   const dayItems = useMemo(() => {
-    if (!selected) return filtered;
-    return filtered.filter((ev) => eventDay(ev.start) === selected);
-  }, [filtered, selected]);
+    const items = selected ? filtered.filter((ev) => eventDay(ev.start) === selected) : filtered;
+    return [...items].sort((a, b) => compareStarts(a.start, b.start, tz) || a.title.localeCompare(b.title));
+  }, [filtered, selected, tz]);
 
   const saDayItems = useMemo(() => {
     const items = data?.saItems || [];
-    if (!selected) return items;
-    return items.filter((ev) => eventDay(ev.start) === selected);
-  }, [data, selected]);
+    const scoped = selected ? items.filter((ev) => eventDay(ev.start) === selected) : items;
+    return [...scoped].sort((a, b) => compareStarts(a.start, b.start, tz) || a.title.localeCompare(b.title));
+  }, [data, selected, tz]);
 
   const chambers = data?.state?.feeds || [];
   const onSaCount = filtered.filter((ev) => ev.onSa).length;
@@ -226,7 +228,8 @@ export function StateCalendar({ code, initialMonth }: { code: string; initialMon
                   : "No official events on this day."
               }
               items={dayItems}
-              timeZone={stateByCode(code)?.tz}
+              showDate={!selected}
+              timeZone={tz}
             />
           )}
         </section>
@@ -244,7 +247,8 @@ export function StateCalendar({ code, initialMonth }: { code: string; initialMon
               }
               items={saDayItems}
               saSide
-              timeZone={stateByCode(code)?.tz}
+              showDate={!selected}
+              timeZone={tz}
             />
           )}
         </section>
@@ -272,12 +276,14 @@ function AgendaList({
   empty,
   items,
   saSide,
+  showDate,
   timeZone,
 }: {
   heading: string;
   empty: string;
   items: AgendaEvent[];
   saSide?: boolean;
+  showDate?: boolean;
   timeZone?: string;
 }) {
   return (
@@ -292,7 +298,13 @@ function AgendaList({
               <div className="flex flex-wrap items-start justify-between gap-2">
                 <div className="min-w-0">
                   <div className="text-xs font-medium uppercase tracking-wide text-muted">
-                    {[formatTime(ev.start, timeZone) || "Time TBA", chamberLabel(ev.chamber || "")].filter(Boolean).join(" · ")}
+                    {[
+                      showDate ? formatDay(ev.start, timeZone) : "",
+                      formatTime(ev.start, timeZone) || "Time TBA",
+                      chamberLabel(ev.chamber || ""),
+                    ]
+                      .filter(Boolean)
+                      .join(" · ")}
                   </div>
                   {ev.url ? (
                     <a href={ev.url} target="_blank" rel="noreferrer" className="mt-0.5 block font-medium no-underline hover:underline">
