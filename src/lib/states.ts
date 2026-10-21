@@ -285,6 +285,24 @@ export function chamberBucket(chamber?: string): "house" | "senate" | "other" {
   return "other";
 }
 
+/** Normalize a stored chamber, or guess House / Senate / Joint from the title. */
+export function inferChamber(chamber?: string, title?: string): string {
+  const raw = (chamber || "").toLowerCase().trim();
+  if (raw === "house" || raw === "senate" || raw === "joint" || raw === "unicameral") return raw;
+  if (raw === "assembly" || raw === "h") return "house";
+  if (raw === "s") return "senate";
+  const fromField = chamberBucket(raw);
+  if (raw && fromField !== "other") return fromField;
+  const t = (title || "").toLowerCase();
+  if (/\bjoint\b/.test(t)) return "joint";
+  const house = /\b(house|assembly)\b/.test(t);
+  const senate = /\bsenate\b/.test(t);
+  if (house && senate) return "joint";
+  if (senate) return "senate";
+  if (house) return "house";
+  return "";
+}
+
 export function chamberLabel(chamber?: string): string {
   const v = (chamber || "").toLowerCase();
   if (v === "house" || v === "assembly" || v === "h") return "House";

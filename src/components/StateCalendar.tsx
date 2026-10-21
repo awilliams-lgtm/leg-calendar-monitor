@@ -5,7 +5,7 @@ import Link from "next/link";
 import { CalendarLegend, SaBadge } from "@/components/SaBadge";
 import { MonthGrid } from "@/components/MonthGrid";
 import { compareStarts, eventDay, formatDay, formatTime, parseMonth, shiftMonth } from "@/lib/dates";
-import { chamberLabel, stateByCode } from "@/lib/states";
+import { chamberLabel, inferChamber, stateByCode } from "@/lib/states";
 import { MeetingExtras } from "@/components/MeetingExtras";
 import { titlesEqual } from "@/lib/match";
 import type { CalendarItem, DayCounts } from "@/lib/types";
@@ -60,7 +60,7 @@ export function StateCalendar({ code, initialMonth }: { code: string; initialMon
   const filtered = useMemo(() => {
     let items = (data?.items || []).filter((ev) => !ev.irrelevant);
     if (chamber !== "all") {
-      items = items.filter((ev) => (ev.chamber || "").toLowerCase() === chamber);
+      items = items.filter((ev) => inferChamber(ev.chamber, ev.title) === chamber);
     }
     if (coverage === "on") items = items.filter((ev) => ev.onSa);
     if (coverage === "off") items = items.filter((ev) => !ev.onSa);
@@ -88,15 +88,33 @@ export function StateCalendar({ code, initialMonth }: { code: string; initialMon
   }, [filtered, selected, tz]);
 
   const saDayItems = useMemo(() => {
-    const items = data?.saItems || [];
+    let items = data?.saItems || [];
+    if (chamber !== "all") items = items.filter((ev) => inferChamber(ev.chamber, ev.title) === chamber);
     const scoped = selected ? items.filter((ev) => eventDay(ev.start) === selected) : items;
     return [...scoped].sort((a, b) => compareStarts(a.start, b.start, tz) || a.title.localeCompare(b.title));
-  }, [data, selected, tz]);
+  }, [data, selected, tz, chamber]);
 
-  const chambers = data?.state?.feeds || [];
+  const chambers = useMemo(() => {
+    const seen = new Set<string>();
+    const out: { chamber: string; label: string }[] = [];
+    for (const f of data?.state?.feeds || []) {
+      if (f.chamber === "joint" && !/^joint\b/i.test(f.label)) continue;
+      if (seen.has(f.chamber)) continue;
+      seen.add(f.chamber);
+      out.push({ chamber: f.chamber, label: chamberLabel(f.chamber) || f.label });
+    }
+    return out;
+  }, [data]);
+
+  useEffect(() => {
+    if (chamber !== "all" && chambers.length && !chambers.some((f) => f.chamber === chamber)) {
+      setChamber("all");
+    }
+  }, [chamber, chambers]);
   const onSaCount = filtered.filter((ev) => ev.onSa).length;
   const missingCount = filtered.length - onSaCount;
   const saCount = data?.saItems?.length || 0;
+  const chamberName = chamber === "all" ? "" : chamberLabel(chamber);
 
   return (
     <div className="space-y-6">
@@ -223,9 +241,11 @@ export function StateCalendar({ code, initialMonth }: { code: string; initialMon
             <AgendaList
               heading="Official legislature"
               empty={
-                filtered.length === 0
-                  ? "No events found on this official calendar for this month."
-                  : "No official events on this day."
+                !selected && chamberName
+                  ? `No official ${chamberName} meetings this month.`
+                  : filtered.length === 0
+                    ? "No events found on this official calendar for this month."
+                    : "No official events on this day."
               }
               items={dayItems}
               showDate={!selected}
@@ -241,9 +261,11 @@ export function StateCalendar({ code, initialMonth }: { code: string; initialMon
             <AgendaList
               heading="SA Pro meetings"
               empty={
-                saCount === 0
+                !data?.saItems?.length
                   ? `SA Pro has no meetings dated in ${data?.label || "this month"}.`
-                  : "No SA Pro meetings on this day."
+                  : !selected && chamberName
+                    ? `No ${chamberName} meetings on SA Pro this month.`
+                    : "No SA Pro meetings on this day."
               }
               items={saDayItems}
               saSide
