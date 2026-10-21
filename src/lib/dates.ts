@@ -113,15 +113,32 @@ export function wallClockInZone(iso: string, timeZone: string): string {
   return `${g("year")}-${g("month")}-${g("day")}T${g("hour")}:${g("minute")}:${g("second")}`;
 }
 
-export function formatTime(start: string, timeZone?: string): string {
+export function localClock(start: string, timeZone?: string): string {
   const zone = timeZone || EASTERN_TZ;
-  const clock = /[zZ]|[+-]\d{2}:\d{2}$/.test(start) ? wallClockInZone(start, zone) : start;
-  const t = clock.slice(11, 16);
+  return /[zZ]|[+-]\d{2}:\d{2}$/.test(start) ? wallClockInZone(start, zone) : start;
+}
+
+export function formatTime(start: string, timeZone?: string): string {
+  const t = localClock(start, timeZone).slice(11, 16);
   if (!t || t === "00:00") return "";
   const [h, m] = t.split(":").map(Number);
   const ap = h >= 12 ? "PM" : "AM";
   const hr = ((h + 11) % 12) + 1;
   return `${hr}:${String(m).padStart(2, "0")} ${ap}`;
+}
+
+export function formatDay(start: string, timeZone?: string): string {
+  const day = eventDay(localClock(start, timeZone));
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) return "";
+  return new Date(`${day}T12:00:00`).toLocaleDateString("en-US", {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+  });
+}
+
+export function compareStarts(a: string, b: string, timeZone?: string): number {
+  return localClock(a, timeZone).localeCompare(localClock(b, timeZone));
 }
 
 export function formatWhen(start: string, timeZone?: string): string {
