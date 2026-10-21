@@ -50,6 +50,15 @@ export async function officialEventsFor(code: string): Promise<{ events: Calenda
     }
   }
 
+  for (let i = 0; i < collected.length; i += 1) {
+    const ev = collected[i];
+    collected[i] = {
+      ...ev,
+      start: wallClockInZone(ev.start, src.tz),
+      end: ev.end ? wallClockInZone(ev.end, src.tz) : ev.end,
+    };
+  }
+
   const vaIcsStale = src.code === "VA" && !collected.some((e) => (e.url || "").includes("liscdn"));
   const haveOpenStates = Boolean(envVar("OPENSTATES_API_KEY"));
   if (haveOpenStates) {
