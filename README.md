@@ -23,7 +23,7 @@ Open http://localhost:3000. Use Settings to connect State Affairs (Cloudflare Ac
 1. Import this GitHub repo into [Vercel](https://vercel.com/new).
 2. Add a [Neon](https://vercel.com/storage/neon) Postgres database. Vercel will set `DATABASE_URL`.
 3. Set environment variables:
-   - `CRON_SECRET` — Vercel Cron sends this automatically if you set the same value in the project.
+   - `CRON_SECRET` — required for cron admission. Configure it for Production in Vercel before deploying; Vercel Cron sends it automatically as a bearer token. Missing or blank configuration returns 401.
    - `ADMIN_PASSWORD` — locks Settings.
    - `SA_COOKIE` or `SA_BEARER_TOKEN` — optional fallback. Prefer one Settings login; cron reuses that session.
    - `OPENSTATES_API_KEY` — optional fallback for thin official feeds.

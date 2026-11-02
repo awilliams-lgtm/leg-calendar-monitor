@@ -3,7 +3,9 @@ import { envVar } from "@/lib/env";
 
 export function assertCron(req: NextRequest): NextResponse | null {
   const secret = envVar("CRON_SECRET");
-  if (!secret) return null;
+  if (!secret) {
+    return NextResponse.json({ ok: false, error: "Unauthorized" }, { status: 401 });
+  }
   const auth = req.headers.get("authorization") || "";
   const query = req.nextUrl.searchParams.get("secret") || "";
   if (auth === `Bearer ${secret}` || query === secret) return null;
