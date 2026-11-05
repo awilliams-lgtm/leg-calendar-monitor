@@ -1,7 +1,7 @@
 import type { CalendarEvent } from "@/lib/types";
 import { extractMeetingAttachments, preferredMeetingUrl, withAttachmentLines } from "@/lib/attachments";
 import { envVar } from "@/lib/env";
-import { extractBills } from "@/lib/match";
+import { extractBills, sanitizeBills } from "@/lib/match";
 import { cleanOfficialTitle, completeOfficialTitle } from "@/lib/title";
 
 type OpenStatesEvent = {
@@ -107,7 +107,7 @@ export async function fetchOpenStatesEvents(
         allDay: Boolean(row.all_day),
         location: locationName(row.location),
         url: preferredMeetingUrl(attachments, row.links?.[0]?.url || row.sources?.[0]?.url || ""),
-        bills: [...new Set([...extractBills(blob), ...billFromAgenda.filter(Boolean)])],
+        bills: sanitizeBills([...extractBills(blob), ...billFromAgenda]),
         description,
         raw: row,
       });

@@ -1,5 +1,5 @@
 import { ensureSchema, getSql } from "@/lib/db";
-import { MATCH_THRESHOLD, bestMatch, eventDateKey, extractBills } from "@/lib/match";
+import { MATCH_THRESHOLD, bestMatch, eventDateKey, extractBills, sanitizeBills } from "@/lib/match";
 import { filterUnconfirmed, findReviewMatch, type ReviewConfirmation } from "@/lib/review";
 import { STATE_SOURCES } from "@/lib/states";
 import { officialHandledKey, inMonth, summarizeState, toCalendarItems } from "@/lib/calendar";
@@ -15,11 +15,11 @@ import type {
 } from "@/lib/types";
 
 function parseBills(raw: unknown): string[] {
-  if (Array.isArray(raw)) return raw.map(String);
+  if (Array.isArray(raw)) return sanitizeBills(raw.map(String));
   if (typeof raw === "string") {
     try {
       const v = JSON.parse(raw);
-      return Array.isArray(v) ? v.map(String) : [];
+      return Array.isArray(v) ? sanitizeBills(v.map(String)) : [];
     } catch {
       return [];
     }
@@ -457,7 +457,7 @@ export async function listGaps(opts: {
     location: String(r.location || ""),
     chamber: String(r.chamber || ""),
     url: String(r.url || ""),
-    bills: [...new Set([...parseBills(r.bills), ...extractBills(String(r.title || ""))])],
+    bills: sanitizeBills([...parseBills(r.bills), ...extractBills(String(r.title || ""))]),
     status: (r.status as GapRow["status"]) || "open",
     score: Number(r.best_score || 0),
     createdAt: String(r.created_at || ""),
