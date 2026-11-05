@@ -20,6 +20,7 @@ import {
   persistResponseCookies,
   saConfigured as sessionConfigured,
 } from "@/lib/sa-session";
+import { bqConfigured, fetchSaFromBigQuery } from "@/lib/sa-bigquery";
 import { STATE_SOURCES } from "@/lib/states";
 
 type SaRow = {
@@ -91,8 +92,10 @@ async function saHeaders(): Promise<HeadersInit> {
 }
 
 export async function saConfigured(): Promise<boolean> {
-  return sessionConfigured();
+  return bqConfigured() || sessionConfigured();
 }
+
+export { bqConfigured };
 
 export function isSaBlocked(err: unknown): boolean {
   const msg = err instanceof Error ? err.message : String(err);
@@ -620,6 +623,12 @@ export async function fetchSaAdminWindow(
     (adminWindowCache.codes === "*" || (onlyCodes && [...onlyCodes].every((code) => adminWindowCache!.have.has(code))))
   ) {
     return sliceAdminWindow(adminWindowCache.byState, onlyCodes);
+  }
+
+  if (bqConfigured()) {
+    const fromBq = await fetchSaFromBigQuery(from, to, onlyCodes ? [...onlyCodes] : undefined);
+    rememberAdminWindow(from, to, fromBq, onlyCodes);
+    return fromBq;
   }
 
   const ids = await saStateIdMap();

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { fetchSaUpcoming, saConfigured, saStateIdMap } from "@/lib/adapters/state-affairs";
+import { bqConfigured, fetchSaUpcoming, saConfigured, saStateIdMap } from "@/lib/adapters/state-affairs";
 import { dayCountsFromLists, inMonth, toCalendarItems } from "@/lib/calendar";
 import { usableSaEvents } from "@/lib/title";
 import { listCalendar } from "@/lib/data";
@@ -47,9 +47,12 @@ async function saForState(code: string, live: boolean): Promise<{ events: Calend
     return { events: [], note: "Connect State Affairs in Settings so everyone can see On SA vs Not on SA." };
   }
   try {
-    const ids = await saStateIdMap();
-    const stateId = ids.get(code);
-    if (!stateId) return { events: [], note: "No State Affairs state id for this legislature." };
+    let stateId: number | undefined;
+    if (!bqConfigured()) {
+      const ids = await saStateIdMap();
+      stateId = ids.get(code);
+      if (!stateId) return { events: [], note: "No State Affairs state id for this legislature." };
+    }
     const window = upcomingWindow();
     const liveEvents = await fetchSaUpcoming(code, stateId, window.from, window.to);
     await mergeSaUpcoming(code, liveEvents, window.from, window.to).catch(() => undefined);

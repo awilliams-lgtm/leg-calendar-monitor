@@ -12,7 +12,8 @@
     "sa:keep:install": "powershell -ExecutionPolicy Bypass -File scripts/install-sa-keep.ps1",
     "sa:pull": "node scripts/sa-pull-meetings.mjs",
     "sa:push": "node scripts/sa-push-meetings.mjs",
-    "test:auth": "tsx --test tests/auth.test.ts"
+    "test:auth": "tsx --test tests/auth.test.ts",
+    "test:sa-bq": "tsx --test tests/sa-bigquery.test.ts"
   },
   "dependencies": {
     "next": "16.3.0",

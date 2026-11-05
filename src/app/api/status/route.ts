@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { saConfigured } from "@/lib/adapters/state-affairs";
+import { bqConfigured, saConfigured } from "@/lib/adapters/state-affairs";
 import { databaseUrl } from "@/lib/db";
 import { envVar } from "@/lib/env";
 import { STATE_SOURCES } from "@/lib/states";
@@ -15,6 +15,7 @@ export async function GET() {
     hosted: Boolean(envVar("VERCEL")),
     openstates: Boolean(envVar("OPENSTATES_API_KEY")),
     stateAffairs: await saConfigured(),
+    saSource: bqConfigured() ? "bigquery" : (await saConfigured()) ? "graphql" : "none",
     slack: Boolean(envVar("SLACK_WEBHOOK_URL")),
     email: Boolean(envVar("RESEND_API_KEY") && envVar("ALERT_TO_EMAIL")),
     cron: Boolean(envVar("CRON_SECRET")),

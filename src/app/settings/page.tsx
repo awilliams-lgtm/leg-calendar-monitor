@@ -64,7 +64,7 @@ function SettingsInner() {
         {status ? (
           <>
             <Flag ok={status.openstates} label="Open States API (optional fallback)" />
-            <Flag ok={status.stateAffairs} label="Shared State Affairs session" />
+            <Flag ok={status.stateAffairs} label="State Affairs meetings" />
             <Flag ok={status.cron} label="Cron secret" />
             <Flag ok={status.slack} label="Slack alerts" />
             <Flag ok={status.email} label="Resend email alerts" />
@@ -86,9 +86,8 @@ function SettingsInner() {
         <h2 className="pt-4 text-xl">Unattended refresh</h2>
         <p className="text-muted">
           Production cron hits <code>/api/cron/tick</code> every hour from 7am to 5pm Eastern. That
-          keeps official calendars current and reuses the shared State Affairs session, including any
-          renewed cookies. On your work PC, <code>npm run sa:keep:install</code> adds a Windows task
-          that can push a fresh browser login if Cloudflare Access expires. Manual: GET{" "}
+          keeps official calendars current and reads SA meetings from BigQuery when{" "}
+          <code>SA_BQ_CREDENTIALS</code> is set. Browser login is only a fallback. Manual: GET{" "}
           <code>/api/cron/tick?states=all</code> with <code>Authorization: Bearer $CRON_SECRET</code>.
         </p>
         <h2 className="pt-4 text-xl">Push SA hearings from the existing scraper</h2>
