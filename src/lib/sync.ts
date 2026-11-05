@@ -9,6 +9,7 @@ import {
   recordSyncRun,
 } from "@/lib/data";
 import { formatGapAlert, notifyEmail, notifySlack } from "@/lib/notify";
+import { attachmentsFromEvent, preferredMeetingUrl, withAttachmentLines } from "@/lib/attachments";
 import { wallClockInZone } from "@/lib/dates";
 import { STATE_SOURCES, stateByCode } from "@/lib/states";
 import type { CalendarEvent, SyncResult } from "@/lib/types";
@@ -59,11 +60,13 @@ export async function officialEventsFor(code: string): Promise<{ events: Calenda
     };
   }
 
-  const vaIcsStale = src.code === "VA" && !collected.some((e) => (e.url || "").includes("liscdn"));
+  const vaIcsFresh = src.code === "VA" && collected.some((e) =>
+    /lis\.blob\.core\.windows\.net|liscdn\.blob/i.test(`${e.url || ""}\n${e.description || ""}`),
+  );
   const haveOpenStates = Boolean(envVar("OPENSTATES_API_KEY"));
   if (haveOpenStates) {
     try {
-      const fillIn = collected.length === 0 || vaIcsStale;
+      const fillIn = collected.length === 0 || (src.code === "VA" && !vaIcsFresh);
       const os = await fetchOpenStatesEvents(src.openstates, afterIso(), fillIn ? 8 : 4);
       const mapped = os.map((e) => ({
         ...e,
@@ -92,6 +95,14 @@ export async function officialEventsFor(code: string): Promise<{ events: Calenda
     if (seen.has(id)) return false;
     seen.add(id);
     return true;
+  }).map((ev) => {
+    const attachments = ev.attachments?.length ? ev.attachments : attachmentsFromEvent(ev.url, ev.description);
+    return {
+      ...ev,
+      url: preferredMeetingUrl(attachments, ev.url || ""),
+      description: attachments.length ? withAttachmentLines(ev.description || "", attachments) : ev.description,
+      attachments,
+    };
   });
   return { events, notes };
 }

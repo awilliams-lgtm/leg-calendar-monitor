@@ -1,4 +1,9 @@
 import type { CalendarEvent } from "@/lib/types";
+import {
+  extractMeetingAttachments,
+  preferredMeetingUrl,
+  withAttachmentLines,
+} from "@/lib/attachments";
 import { officialSourceRaw } from "@/lib/event-raw";
 import { extractBills } from "@/lib/match";
 import { fetchText } from "@/lib/html";
@@ -34,10 +39,17 @@ export function parseIcsText(ics: string): CalendarEvent[] {
       const m = body.match(re);
       return m ? unescape(m[1].trim()) : "";
     };
+    const fields = (name: string) =>
+      [...body.matchAll(new RegExp(`^${name}[^:]*:(.*)$`, "gim"))].map((m) => unescape(m[1].trim()));
     const uid = field("UID") || field("SUMMARY") + field("DTSTART");
     const start = icsTimeToIso(field("DTSTART"));
     const title = (field("SUMMARY") || "Untitled event").replace(/\s+/g, " ").trim();
     if (!uid || !start) continue;
+    const description = field("DESCRIPTION");
+    const urlField = field("URL");
+    const attachments = extractMeetingAttachments([description, urlField, ...fields("ATTACH")].join("\n"));
+    const url = preferredMeetingUrl(attachments, urlField);
+    const storedDescription = withAttachmentLines(description, attachments);
     const event = {
       sourceId: uid.slice(0, 180),
       state: "",
@@ -45,10 +57,10 @@ export function parseIcsText(ics: string): CalendarEvent[] {
       start,
       end: field("DTEND") ? icsTimeToIso(field("DTEND")) : "",
       location: field("LOCATION"),
-      url: field("URL"),
-      bills: extractBills(`${title}\n${field("DESCRIPTION")}`),
-      description: field("DESCRIPTION"),
-      raw: { vevent: body.slice(0, 8000), uid, url: field("URL") },
+      url,
+      bills: extractBills(`${title}\n${storedDescription}`),
+      description: storedDescription,
+      raw: { vevent: body.slice(0, 8000), uid, url, attachments },
     };
     events.push({ ...event, raw: officialSourceRaw(event) });
   }
@@ -56,5 +68,5 @@ export function parseIcsText(ics: string): CalendarEvent[] {
 }
 
 export async function fetchIcsEvents(icsUrl: string): Promise<CalendarEvent[]> {
-  return parseIcsText(await fetchText(icsUrl));
+  return parseIcsText(await fetchText(icsUrl, 45000));
 }

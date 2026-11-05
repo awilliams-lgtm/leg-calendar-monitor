@@ -1,4 +1,5 @@
 import type { CalendarEvent } from "@/lib/types";
+import { extractMeetingAttachments, preferredMeetingUrl, withAttachmentLines } from "@/lib/attachments";
 import { envVar } from "@/lib/env";
 import { extractBills } from "@/lib/match";
 import { cleanOfficialTitle, completeOfficialTitle } from "@/lib/title";
@@ -86,6 +87,15 @@ export async function fetchOpenStatesEvents(
             .filter((e) => (e.entity_type || "").toLowerCase().includes("bill"))
             .map((e) => e.name || ""),
         ) || [];
+      const linkLines = [
+        ...(row.links || []).map((l) => l.url || ""),
+        ...(row.sources || []).map((s) => s.url || ""),
+      ]
+        .filter(Boolean)
+        .map((url) => `Document: ${url}`)
+        .join("\n");
+      const attachments = extractMeetingAttachments(`${row.description || ""}\n${blob}\n${linkLines}`);
+      const description = withAttachmentLines(row.description || blob, attachments);
       events.push({
         sourceId: row.id,
         state: "",
@@ -96,9 +106,9 @@ export async function fetchOpenStatesEvents(
         end: row.end_date,
         allDay: Boolean(row.all_day),
         location: locationName(row.location),
-        url: row.links?.[0]?.url || row.sources?.[0]?.url || "",
+        url: preferredMeetingUrl(attachments, row.links?.[0]?.url || row.sources?.[0]?.url || ""),
         bills: [...new Set([...extractBills(blob), ...billFromAgenda.filter(Boolean)])],
-        description: row.description || "",
+        description,
         raw: row,
       });
     }

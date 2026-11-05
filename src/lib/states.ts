@@ -230,8 +230,8 @@ export const STATE_SOURCES: StateSource[] = [
     J("https://legislature.vermont.gov/committee/weeklyAgendas/2026", "Weekly committee agendas"),
   ]),
   src("VA", "Virginia", "America/New_York", "https://lis.virginia.gov/", [
-    J("https://liscdn.blob.core.windows.net/cdn/meetings.ics", "Meetings ICS"),
-  ], { icsUrl: "https://liscdn.blob.core.windows.net/cdn/meetings.ics" }),
+    J("https://lis.blob.core.windows.net/cdn/meetings.ics", "Meetings ICS"),
+  ], { icsUrl: "https://lis.blob.core.windows.net/cdn/meetings.ics" }),
   src("WA", "Washington", "America/Los_Angeles", "https://app.leg.wa.gov/committeeschedules/", [
     H("https://app.leg.wa.gov/committeeschedules/?chamber=House"),
     S("https://app.leg.wa.gov/committeeschedules/?chamber=Senate"),

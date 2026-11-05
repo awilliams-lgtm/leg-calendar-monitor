@@ -169,7 +169,7 @@ export function GapTable({
               <td className="px-3 py-2">
                 <div className="font-medium">{g.title}</div>
                 {g.location ? <div className="text-xs text-muted">{g.location}</div> : null}
-                <MeetingExtras url={g.url} bills={g.bills} description={g.description} />
+                <MeetingExtras url={g.url} bills={g.bills} description={g.description} defaultOpen />
               </td>
               <td className="px-3 py-2 text-xs text-muted">{g.saMatchTitle || "—"}</td>
               <td className="px-3 py-2">

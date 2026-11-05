@@ -3,11 +3,19 @@ import { MATCH_THRESHOLD, bestMatchEvent, extractBills } from "@/lib/match";
 import { cleanOfficialTitle, completeOfficialTitle, isGenericCommitteeLabel, junkOfficialEvent } from "@/lib/title";
 import type { CalendarEvent } from "@/lib/types";
 
+function hasHttp(value: string): boolean {
+  return /https?:\/\//i.test(value);
+}
+
 function richerText(incoming?: string, existing?: string): string {
   const next = String(incoming || "").trim();
   const prev = String(existing || "").trim();
   if (!next) return prev;
   if (!prev) return next;
+  const nextLink = hasHttp(next);
+  const prevLink = hasHttp(prev);
+  if (nextLink && !prevLink) return next;
+  if (prevLink && !nextLink) return prev;
   return next.length >= prev.length ? next : prev;
 }
 

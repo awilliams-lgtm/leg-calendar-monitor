@@ -1,3 +1,4 @@
+import { attachmentsFromEvent } from "@/lib/attachments";
 import { MATCH_THRESHOLD, bestMatch, extractBills, type Matchable } from "@/lib/match";
 import { STATE_SOURCES, publicOfficialMeetingUrl } from "@/lib/states";
 import { eventDay } from "@/lib/dates";
@@ -31,6 +32,7 @@ export function toCalendarItems(
       url: publicOfficialMeetingUrl(ev.state, ev.url || "", ev.chamber || ""),
       bills: [...new Set([...(ev.bills || []), ...extractBills(`${ev.title}\n${ev.description || ""}`)])],
       description: ev.description || "",
+      attachments: ev.attachments?.length ? ev.attachments : attachmentsFromEvent(ev.url, ev.description),
       onSa: !wasIrrelevant && (matched || wasHandled),
       handled: wasHandled,
       irrelevant: wasIrrelevant,
