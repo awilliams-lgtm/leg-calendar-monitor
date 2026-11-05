@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { attachmentsFromEvent, isPdfUrl, type MeetingAttachment } from "@/lib/attachments";
+import { sanitizeBills } from "@/lib/match";
 
 type MeetingExtrasProps = {
   url?: string;
@@ -76,7 +77,7 @@ export function MeetingExtras({ url, bills, description, attachments, defaultOpe
     };
   }, [open, url, loaded]);
 
-  const listed = [...new Set([...(bills || []), ...(loaded?.bills || [])])];
+  const listed = sanitizeBills([...(bills || []), ...(loaded?.bills || [])]);
   const notes = cleanNotes(loaded?.notes || description);
   const files = mergeAttachments(stored, loaded?.attachments);
   const hasAnything = Boolean(url || files.length || notes || listed.length);

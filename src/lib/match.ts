@@ -1,6 +1,7 @@
 import { normalizeCommitteeTitle } from "@/lib/committee-title";
 
-const BILL_RE = /\b(AB|SB|HB|HR|SR|AJR|SJR|SCR|HCR|HJR|LB|LD|HF|SF|H|S)\s*\.?\s*(\d{1,5})\b/gi;
+const BILL_PREFIX =
+  "AJR|SJR|SCR|HCR|HJR|ACR|HR|SR|HB|SB|AB|LB|LD|HF|SF|HD|SD";
 
 const STOP = new Set([
   "the",
@@ -59,32 +60,90 @@ const ABBR: Record<string, string[]> = {
   sub: ["subcommittee"],
 };
 
+function stripBillSource(text: string): string {
+  return String(text || "")
+    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<\/?h[1-6]\b[^>]*>/gi, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/https?:\/\/\S+/gi, " ")
+    .replace(/&[a-z#0-9]+;/gi, " ")
+    .replace(/\s+/g, " ");
+}
+
+function formatBill(kind: string, num: string): string | null {
+  const k = String(kind || "")
+    .toUpperCase()
+    .replace(/[^A-Z]/g, "");
+  const n = String(num || "").replace(/\D/g, "");
+  if (!k || !n || n.length > 5) return null;
+  if (k === "H" || k === "S") return `${k}.${n}`;
+  return `${k} ${n}`;
+}
+
+/** Drop heading leftovers like H1/H2 and keep real bill identifiers. */
+export function normalizeBillId(raw: string): string | null {
+  const t = String(raw || "").trim().toUpperCase().replace(/\s+/g, " ");
+  if (!t) return null;
+  const dotted = t.match(/^([HS])\.\s*(\d{1,5})$/);
+  if (dotted) return formatBill(dotted[1], dotted[2]);
+  const multi = t.match(new RegExp(`^(${BILL_PREFIX})[\\.\\s-]*(\\d{1,5})$`));
+  if (multi) return formatBill(multi[1], multi[2]);
+  const glued = t.match(/^([HS])(\d{3,5})$/);
+  if (glued) return formatBill(glued[1], glued[2]);
+  const spaced = t.match(/^([HS])\s+(\d{3,5})$/);
+  if (spaced) return formatBill(spaced[1], spaced[2]);
+  return null;
+}
+
+export function sanitizeBills(bills: Iterable<string> | null | undefined): string[] {
+  const found = new Set<string>();
+  for (const raw of bills || []) {
+    const id = normalizeBillId(raw);
+    if (id) found.add(id);
+  }
+  return [...found].sort();
+}
+
 export function extractBills(text: string): string[] {
   const found = new Set<string>();
-  const src = text || "";
   const add = (kind: string, num: string) => {
-    const k = String(kind || "")
-      .toUpperCase()
-      .replace(/[^A-Z]/g, "");
-    if (k && num) found.add(`${k} ${num}`);
+    const id = formatBill(kind, num);
+    if (id) found.add(id);
   };
-  src.replace(/\bH\.?\s*R\.?\s*(\d{1,5})\b/gi, (_m, num: string) => {
-    add("HR", num);
-    return "";
-  });
-  src.replace(/\bS\.?\s*B\.?\s*(\d{1,5})\b/gi, (_m, num: string) => {
-    add("SB", num);
-    return "";
-  });
-  src.replace(/\bH\.?\s*B\.?\s*(\d{1,5})\b/gi, (_m, num: string) => {
+  const src = stripBillSource(text);
+
+  src.replace(/\b(?:house|assembly)\s+bills?\s*(?:no\.?\s*)?(\d{1,5})\b/gi, (_m, num: string) => {
     add("HB", num);
     return "";
   });
-  src.replace(/\bS\.\s+(\d{1,5})\b/g, (_m, num: string) => {
-    add("S", num);
+  src.replace(/\bsenate\s+bills?\s*(?:no\.?\s*)?(\d{1,5})\b/gi, (_m, num: string) => {
+    add("SB", num);
     return "";
   });
-  src.replace(BILL_RE, (_m, kind: string, num: string) => {
+  src.replace(/\bH\.\s*R\.\s*(\d{1,5})\b/gi, (_m, num: string) => {
+    add("HR", num);
+    return "";
+  });
+  src.replace(/\bS\.\s*B\.\s*(\d{1,5})\b/gi, (_m, num: string) => {
+    add("SB", num);
+    return "";
+  });
+  src.replace(/\bH\.\s*B\.\s*(\d{1,5})\b/gi, (_m, num: string) => {
+    add("HB", num);
+    return "";
+  });
+  src.replace(new RegExp(`\\b(${BILL_PREFIX})\\.?\\s*-?\\s*(\\d{1,5})\\b`, "gi"), (_m, kind: string, num: string) => {
+    add(kind, num);
+    return "";
+  });
+  // MA / NY / SC / Congress senate: H.1234 or S. 12 — period required so <h1> never matches.
+  src.replace(/\b([HS])\.\s*(\d{1,5})\b/g, (_m, kind: string, num: string) => {
+    add(kind, num);
+    return "";
+  });
+  // Compact API ids like H5667, not H1/H2.
+  src.replace(/\b([HS])(\d{3,5})\b/g, (_m, kind: string, num: string) => {
     add(kind, num);
     return "";
   });

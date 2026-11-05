@@ -1,5 +1,5 @@
 import { pickRicherRaw } from "@/lib/event-raw";
-import { MATCH_THRESHOLD, bestMatchEvent, extractBills } from "@/lib/match";
+import { MATCH_THRESHOLD, bestMatchEvent, extractBills, sanitizeBills } from "@/lib/match";
 import { cleanOfficialTitle, completeOfficialTitle, isGenericCommitteeLabel, junkOfficialEvent } from "@/lib/title";
 import type { CalendarEvent } from "@/lib/types";
 
@@ -60,14 +60,12 @@ function richerStart(incoming?: string, existing?: string): string {
 }
 
 export function mergeOfficialEvent(existing: CalendarEvent, incoming: CalendarEvent): CalendarEvent {
-  const bills = [
-    ...new Set([
-      ...(existing.bills || []),
-      ...(incoming.bills || []),
-      ...extractBills(`${incoming.title}\n${incoming.description || ""}`),
-      ...extractBills(`${existing.title}\n${existing.description || ""}`),
-    ]),
-  ].sort();
+  const bills = sanitizeBills([
+    ...(existing.bills || []),
+    ...(incoming.bills || []),
+    ...extractBills(`${incoming.title}\n${incoming.description || ""}`),
+    ...extractBills(`${existing.title}\n${existing.description || ""}`),
+  ]);
   return {
     ...existing,
     title: pickOfficialTitle(
