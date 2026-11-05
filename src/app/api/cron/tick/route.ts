@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { fetchSaProfile, saConfigured } from "@/lib/adapters/state-affairs";
+import { bqConfigured, fetchSaProfile, saConfigured } from "@/lib/adapters/state-affairs";
 import { assertCron } from "@/lib/auth";
 import { backfillEmptyOfficialRaw, getMeta, setMeta } from "@/lib/data";
 import { isEasternScrapeHour } from "@/lib/dates";
@@ -61,7 +61,7 @@ export async function GET(req: NextRequest) {
 
   let sa: Awaited<ReturnType<typeof refreshSaMeetings>> | { error: string } | null = null;
   try {
-    if (await saConfigured()) await fetchSaProfile();
+    if (!bqConfigured() && (await saConfigured())) await fetchSaProfile();
     sa = await refreshSaMeetings(undefined, { force: true });
   } catch (err) {
     sa = { error: err instanceof Error ? err.message : String(err) };
