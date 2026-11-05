@@ -288,6 +288,7 @@ type AgendaEvent = {
   url?: string;
   bills?: string[];
   description?: string;
+  attachments?: { label: string; url: string }[];
   onSa?: boolean;
   handled?: boolean;
   saMatchTitle?: string;
@@ -344,8 +345,24 @@ function AgendaList({
               {ev.onSa && ev.saMatchTitle && !titlesEqual(ev.saMatchTitle, ev.title) && (
                 <div className="mt-1 text-[11px] text-teal">Matched: {ev.saMatchTitle}</div>
               )}
-              {!saSide && ev.onSa === false && (
-                <MeetingExtras url={ev.url} bills={ev.bills} description={ev.description} />
+              {!saSide && ev.attachments && ev.attachments.length > 0 && (
+                <ul className="mt-1 space-y-0.5 text-xs">
+                  {ev.attachments.slice(0, 6).map((file) => (
+                    <li key={file.url}>
+                      <a href={file.url} target="_blank" rel="noreferrer">
+                        {file.label}
+                      </a>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {!saSide && (
+                <MeetingExtras
+                  url={ev.url}
+                  bills={ev.bills}
+                  description={ev.description}
+                  attachments={ev.attachments}
+                />
               )}
               {saSide && ev.bills && ev.bills.length > 0 && (
                 <div className="mt-1 text-xs text-muted">{ev.bills.join(", ")}</div>

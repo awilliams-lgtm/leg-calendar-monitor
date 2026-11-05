@@ -1,6 +1,12 @@
 import { extractBills } from "@/lib/match";
 import { fetchText, stripTags } from "@/lib/html";
 import { STATE_SOURCES } from "@/lib/states";
+import {
+  extractMeetingAttachments,
+  isDocumentLink,
+  isPdfUrl,
+  type MeetingAttachment,
+} from "@/lib/attachments";
 
 const ALLOWED_HOST = /^(docs\.house\.gov|clerk\.house\.gov|(www\.)?senate\.gov|[a-z0-9-]+\.senate\.gov|[a-z0-9-]+\.house\.gov)$/i;
 
@@ -15,6 +21,8 @@ const SOURCE_HOSTS = (() => {
       }
     }
   }
+  hosts.add("lis.blob.core.windows.net");
+  hosts.add("liscdn.blob.core.windows.net");
   return hosts;
 })();
 
@@ -22,6 +30,7 @@ export type OfficialAgenda = {
   url: string;
   bills: string[];
   notes: string;
+  attachments: MeetingAttachment[];
 };
 
 export function allowedOfficialAgendaUrl(raw: string): boolean {
@@ -50,14 +59,28 @@ export function parseOfficialAgendaPage(html: string, pageUrl: string): Official
   const items = [...legislation.matchAll(/<li\b[^>]*>([\s\S]*?)<\/li>/gi)]
     .map((m) => stripTags(m[1]).replace(/\s+/g, " ").trim())
     .filter((line) => line && !/^pdf$/i.test(line));
-  const notes = items.slice(0, 20).join("\n");
+  const attachments = extractMeetingAttachments(html, pageUrl).filter(isDocumentLink).slice(0, 20);
+  const notes = [
+    ...items.slice(0, 20),
+    ...attachments.map((a) => `${a.label}: ${a.url}`),
+  ]
+    .filter(Boolean)
+    .join("\n");
   const bills = extractBills(`${notes}\n${stripTags(legislation || html).slice(0, 8000)}`);
-  return { url: pageUrl, bills, notes };
+  return { url: pageUrl, bills, notes, attachments };
 }
 
 export async function fetchOfficialAgenda(rawUrl: string): Promise<OfficialAgenda> {
   if (!allowedOfficialAgendaUrl(rawUrl)) {
     throw new Error("Agenda URL is not an allowed official host");
+  }
+  if (isPdfUrl(rawUrl)) {
+    return {
+      url: rawUrl,
+      bills: [],
+      notes: "",
+      attachments: [{ label: "Agenda PDF", url: rawUrl }],
+    };
   }
   const html = await fetchText(rawUrl, 20000);
   return parseOfficialAgendaPage(html, rawUrl);

@@ -12,6 +12,7 @@ export type CalendarEvent = {
   url?: string;
   bills: string[];
   description?: string;
+  attachments?: { label: string; url: string }[];
   raw?: unknown;
 };
 
@@ -73,6 +74,7 @@ export type CalendarItem = {
   url: string;
   bills: string[];
   description?: string;
+  attachments?: { label: string; url: string }[];
   onSa: boolean;
   handled?: boolean;
   irrelevant?: boolean;
