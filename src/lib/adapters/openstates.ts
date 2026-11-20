@@ -2,6 +2,7 @@ import type { CalendarEvent } from "@/lib/types";
 import { extractMeetingAttachments, preferredMeetingUrl, withAttachmentLines } from "@/lib/attachments";
 import { envVar } from "@/lib/env";
 import { extractBills, sanitizeBills } from "@/lib/match";
+import { inferChamber } from "@/lib/states";
 import { cleanOfficialTitle, completeOfficialTitle } from "@/lib/title";
 
 type OpenStatesEvent = {
@@ -96,16 +97,18 @@ export async function fetchOpenStatesEvents(
         .join("\n");
       const attachments = extractMeetingAttachments(`${row.description || ""}\n${blob}\n${linkLines}`);
       const description = withAttachmentLines(row.description || blob, attachments);
+      const title = cleanOfficialTitle(
+        completeOfficialTitle(row.name || "Untitled event", locationName(row.location), row.description || ""),
+      );
       events.push({
         sourceId: row.id,
         state: "",
-        title: cleanOfficialTitle(
-          completeOfficialTitle(row.name || "Untitled event", locationName(row.location), row.description || ""),
-        ),
+        title,
         start: row.start_date,
         end: row.end_date,
         allDay: Boolean(row.all_day),
         location: locationName(row.location),
+        chamber: inferChamber("", title),
         url: preferredMeetingUrl(attachments, row.links?.[0]?.url || row.sources?.[0]?.url || ""),
         bills: sanitizeBills([...extractBills(blob), ...billFromAgenda]),
         description,
