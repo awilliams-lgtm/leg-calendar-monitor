@@ -15,6 +15,7 @@ import { STATE_SOURCES, stateByCode } from "@/lib/states";
 import type { CalendarEvent, SyncResult } from "@/lib/types";
 import { databaseUrl } from "@/lib/db";
 import { envVar } from "@/lib/env";
+import { codeVersion, postPulse, pulseEvent, syncOutcome } from "@/lib/pulse";
 
 function afterIso(): string {
   const d = new Date();
@@ -133,17 +134,22 @@ export async function syncState(code: string): Promise<SyncResult> {
     newGaps: 0,
   };
 
+  const startedAt = new Date();
+  const pulse = { threw: false, keptLastGood: false, found: 0, failedNotes: 0 };
   try {
     const pulled = await officialEventsFor(state);
     result.notes = pulled.notes;
     const official = pulled.events;
+    pulse.found = official.length;
+    pulse.failedNotes = (pulled.notes || []).filter((note) => /\bfailed\b/i.test(note)).length;
     const cache = await loadOfficialCache();
     const existing = cache.events.filter((e) => e.state === state);
-    const failed = (pulled.notes || []).some((note) => /\bfailed\b/i.test(note));
+    const failed = pulse.failedNotes > 0;
     const confirmedRead = (pulled.notes || []).some(
       (note) => /→\s*\d+/.test(note) && !/\bfailed\b/i.test(note),
     );
     if (failed && official.length === 0 && existing.length > 0 && !confirmedRead) {
+      pulse.keptLastGood = true;
       result.error = `Kept ${existing.length} last-good official meetings; scrape returned 0.`;
       await recordSyncRun(state, "official", 0, result.error);
     } else {
@@ -158,9 +164,23 @@ export async function syncState(code: string): Promise<SyncResult> {
     }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
+    pulse.threw = true;
     result.error = message;
     await recordSyncRun(state, "official", 0, message);
   }
+  const failedNotes = (result.notes || []).filter((note) => /\bfailed\b/i.test(note));
+  await postPulse([
+    pulseEvent({
+      state,
+      startedAt,
+      finishedAt: new Date(),
+      outcome: syncOutcome(pulse),
+      found: pulse.found,
+      written: result.officialUpserted,
+      error: result.error || (failedNotes.length ? failedNotes.join("; ") : null),
+      codeVersion: codeVersion(),
+    }),
+  ]);
 
   try {
     const sa = await refreshSaMeetings([state], { force: true });
