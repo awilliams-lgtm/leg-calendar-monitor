@@ -36,7 +36,7 @@ export function toCalendarItems(
       onSa: !wasIrrelevant && (matched || wasHandled),
       handled: wasHandled,
       irrelevant: wasIrrelevant,
-      saMatchTitle: match.title,
+      saMatchTitle: matched ? match.title : "",
     };
   });
 }

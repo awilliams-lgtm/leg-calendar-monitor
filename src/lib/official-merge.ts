@@ -59,19 +59,24 @@ function richerStart(incoming?: string, existing?: string): string {
   return next;
 }
 
-export function mergeOfficialEvent(existing: CalendarEvent, incoming: CalendarEvent): CalendarEvent {
+export function mergeOfficialEvent(
+  existing: CalendarEvent,
+  incoming: CalendarEvent,
+  preferIncomingTitle = false,
+): CalendarEvent {
   const bills = sanitizeBills([
     ...(existing.bills || []),
     ...(incoming.bills || []),
     ...extractBills(`${incoming.title}\n${incoming.description || ""}`),
     ...extractBills(`${existing.title}\n${existing.description || ""}`),
   ]);
+  const incomingTitle = completeOfficialTitle(incoming.title, incoming.location, incoming.description);
+  const existingTitle = completeOfficialTitle(existing.title, existing.location, existing.description);
   return {
     ...existing,
-    title: pickOfficialTitle(
-      completeOfficialTitle(incoming.title, incoming.location, incoming.description),
-      completeOfficialTitle(existing.title, existing.location, existing.description),
-    ),
+    title: preferIncomingTitle
+      ? cleanOfficialTitle(incomingTitle) || existing.title
+      : pickOfficialTitle(incomingTitle, existingTitle),
     start: richerStart(incoming.start, existing.start),
     end: richerText(incoming.end, existing.end) || existing.end,
     allDay: incoming.allDay ?? existing.allDay,
@@ -96,7 +101,10 @@ export function foldOfficialIncoming(existing: CalendarEvent[], incoming: Calend
     if (!raw.sourceId || !raw.title || !raw.start) continue;
     const incomingEvent = { ...raw, bills: raw.bills || [] };
     if (byId.has(incomingEvent.sourceId)) {
-      byId.set(incomingEvent.sourceId, mergeOfficialEvent(byId.get(incomingEvent.sourceId)!, incomingEvent));
+      byId.set(
+        incomingEvent.sourceId,
+        mergeOfficialEvent(byId.get(incomingEvent.sourceId)!, incomingEvent, true),
+      );
       claimed.add(incomingEvent.sourceId);
       continue;
     }

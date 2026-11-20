@@ -7,7 +7,7 @@ import { mergeOfficialEvent } from "@/lib/official-merge";
 import { extractPdfVisibleText, fetchPdfText } from "@/lib/pdf-text";
 import { upcomingWindow, wallClockInZone } from "@/lib/dates";
 import { officialSourceRaw } from "@/lib/event-raw";
-import { STATE_SOURCES, type StateSource } from "@/lib/states";
+import { STATE_SOURCES, inferChamber, type StateSource } from "@/lib/states";
 import { cleanOfficialTitle, completeOfficialTitle, junkOfficialEvent, junkOfficialTitle, withChamberLabel } from "@/lib/title";
 import type { CalendarEvent } from "@/lib/types";
 
@@ -1415,11 +1415,7 @@ export async function fetchOhMeetings(): Promise<CalendarEvent[]> {
             title,
             start,
             location: row.location || "",
-            chamber: (com.chamber || "").toLowerCase().includes("senate")
-              ? "senate"
-              : (com.chamber || "").toLowerCase().includes("house")
-                ? "house"
-                : "",
+            chamber: inferChamber(typeof com.chamber === "string" ? com.chamber : "", title),
             url: `https://www.legislature.ohio.gov/schedules/session-schedule`,
           });
         })

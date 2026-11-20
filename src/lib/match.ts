@@ -1,4 +1,5 @@
 import { normalizeCommitteeTitle } from "@/lib/committee-title";
+import { inferChamber } from "@/lib/states";
 
 const BILL_PREFIX =
   "AJR|SJR|SCR|HCR|HJR|ACR|HR|SR|HB|SB|AB|LB|LD|HF|SF|HD|SD";
@@ -246,20 +247,14 @@ function titleScore(officialTitle: string, saTitle: string): number {
   let hit = 0;
   for (const x of smaller) if (larger.has(x)) hit += 1;
   if (smaller.size >= 2 && hit === smaller.size) score = Math.max(score, 0.82);
-  if (smaller.size === 1 && hit === 1) {
+  // One shared leftover word ("education", "judiciary") is not enough when the
+  // other title still has extra distinctive tokens like "board" or "workforce".
+  if (coreA.size === 1 && coreB.size === 1 && hit === 1) {
     const only = [...smaller][0] || "";
     if (only.length >= 8) score = Math.max(score, 0.8);
   }
   if (phraseContains(officialTitle, saTitle)) score = Math.max(score, 0.84);
   return score;
-}
-
-function chamberNorm(value: string): string {
-  const v = (value || "").toLowerCase();
-  if (v.includes("house") || v === "h" || v.includes("assembly")) return "house";
-  if (v.includes("senate") || v === "s") return "senate";
-  if (v.includes("joint")) return "joint";
-  return "";
 }
 
 export type Matchable = {
@@ -268,6 +263,13 @@ export type Matchable = {
   chamber?: string;
   bills?: string[];
 };
+
+function eventChamber(ev: Matchable): string {
+  const fromTitle = inferChamber("", ev.title);
+  const fromField = inferChamber(ev.chamber, ev.title);
+  const v = fromTitle || fromField;
+  return v === "unicameral" ? "" : v;
+}
 
 export type MatchResult = { score: number; title: string };
 
@@ -283,13 +285,12 @@ export function scorePair(official: Matchable, sa: Matchable): number {
   const billsB = sa.bills?.length ? sa.bills : extractBills(sa.title);
   const billHit = billsA.some((b) => billsB.includes(b));
 
-  const c1 = chamberNorm(official.chamber || "");
-  const c2 = chamberNorm(sa.chamber || "");
-  const chamberOk = !c1 || !c2 || c1 === c2;
+  const c1 = eventChamber(official);
+  const c2 = eventChamber(sa);
+  if (c1 && c2 && c1 !== c2) return 0;
 
   let score = titleScore(official.title, sa.title);
   if (billHit) score = Math.max(score, 0.86);
-  if (!chamberOk) score *= 0.7;
   if (offset === 1) {
     if (score < 0.74) return 0;
     score *= 0.9;

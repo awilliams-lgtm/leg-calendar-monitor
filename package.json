@@ -13,6 +13,7 @@
     "sa:pull": "node scripts/sa-pull-meetings.mjs",
     "sa:push": "node scripts/sa-push-meetings.mjs",
     "test:auth": "tsx --test tests/auth.test.ts",
+    "test:match": "tsx --test tests/match.test.ts",
     "test:sa-bq": "tsx --test tests/sa-bigquery.test.ts"
   },
   "dependencies": {
